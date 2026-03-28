@@ -1,14 +1,12 @@
 FROM nginx:alpine
-
-# Need bash + python3 for entrypoint injection
-RUN apk add --no-cache bash python3
+RUN apk add --no-cache bash
 
 COPY index.html /tmp/index.template.html
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
-# Remove default nginx site
+# Remove default nginx site so our template is the only one
 RUN rm -f /etc/nginx/conf.d/default.conf
 
 ENV PORT=8080

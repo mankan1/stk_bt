@@ -1,6 +1,11 @@
 FROM nginx:alpine
-COPY index.html /usr/share/nginx/html/index.html
+RUN apk add --no-cache bash
+COPY index.html /tmp/index.template.html
 COPY nginx.conf /etc/nginx/templates/default.conf.template
+COPY entrypoint.sh /entrypoint.sh
+RUN chmod +x /entrypoint.sh
 ENV PORT=8080
+ENV LP_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
+ENV LP_STRIPE_LINK=https://buy.stripe.com/YOUR_LINK
 EXPOSE 8080
-CMD ["nginx", "-g", "daemon off;"]
+ENTRYPOINT ["/entrypoint.sh"]

@@ -6,8 +6,11 @@
 <title>LIVERMORE PROTOCOL — ES Options Intelligence</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <!-- candlestick drawn via custom canvas renderer -->
-<!-- Google One Tap Sign-In (no Firebase needed) -->
-<script src="https://accounts.google.com/gsi/client" async defer></script>
+<!-- Firebase Auth (Google Sign-In) -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-auth-compat.js"></script>
+<!-- Stripe.js -->
+<script src="https://js.stripe.com/v3/"></script>
 <link href="https://fonts.googleapis.com/css2?family=Share+Tech+Mono&family=Orbitron:wght@400;700;900&family=IBM+Plex+Mono:wght@300;400;600;700&display=swap" rel="stylesheet">
 <style>
 :root {
@@ -401,8 +404,10 @@ select:focus, input:focus { border-color:var(--blue); }
       Sign in with Google to access the full<br>
       ES Options Intelligence System.
     </p>
-    <!-- Google One Tap renders its button here -->
-    <div id="lp-google-btn" style="display:flex;justify-content:center;margin-bottom:10px"></div>
+    <button class="lp-btn lp-btn-google" onclick="lpSignInGoogle()">
+      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>
+      Continue with Google
+    </button>
     <div class="lp-countdown" id="lp-auth-countdown"></div>
   </div>
 </div>
@@ -2914,221 +2919,309 @@ function renderScanner(tab) {
 // ═══════════════════════════════════════════════════════════════════════════
 //  LIVERMORE PROTOCOL — AUTH + PAYWALL
 //
-//  CONFIG: replace these 4 v<script>
-// ═══════════════════════════════════════════════════════════════════════════
-//  LIVERMORE PROTOCOL — AUTH + PAYWALL
-//  Uses: Google One Tap (GSI) — no Firebase needed
-//  Config: set LP_GOOGLE_CLIENT_ID and LP_STRIPE_LINK via Railway env vars
-//          injected by entrypoint.sh as window.LP_GOOGLE_CLIENT_ID etc.
+//  CONFIG: replace these 4 values in your Railway environment or directly here
+//  FIREBASE_API_KEY, FIREBASE_AUTH_DOMAIN, FIREBASE_PROJECT_ID  → Firebase console
+//  STRIPE_PAYMENT_LINK → Stripe Dashboard → Payment Links → copy URL
 // ═══════════════════════════════════════════════════════════════════════════
 
 var LP_CONFIG = {
-  // Google OAuth Client ID — from console.cloud.google.com
-  // APIs & Services → Credentials → Create → OAuth 2.0 Client ID → Web application
-  googleClientId: window.LP_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
+  // ── Firebase (Google Sign-In) ──────────────────────────────────────────────
+  // Get these from: console.firebase.google.com → Project Settings → Web app
+  firebaseApiKey:     window.LP_FIREBASE_API_KEY     || 'YOUR_FIREBASE_API_KEY',
+  firebaseAuthDomain: window.LP_FIREBASE_AUTH_DOMAIN || 'YOUR_PROJECT.firebaseapp.com',
+  firebaseProjectId:  window.LP_FIREBASE_PROJECT_ID  || 'YOUR_PROJECT_ID',
 
-  // Stripe Payment Link — dashboard.stripe.com → Payment Links → Create
-  stripePaymentLink: window.LP_STRIPE_LINK || 'https://buy.stripe.com/YOUR_LINK',
+  // ── Stripe ────────────────────────────────────────────────────────────────
+  // Create at: dashboard.stripe.com → Payment Links → + Create
+  // Set price to $29/month recurring, copy the link URL
+  stripePaymentLink: window.LP_STRIPE_LINK || 'https://buy.stripe.com/YOUR_PAYMENT_LINK',
 
-  // Timing
+  // ── Timing ────────────────────────────────────────────────────────────────
   freePreviewMs:  30 * 1000,   // 30s before login wall
   freeLoggedInMs: 30 * 1000,   // 30s after login before upgrade wall
 };
 
+// ── State ─────────────────────────────────────────────────────────────────────
 var LP = {
-  user:        null,
-  isPro:       false,
-  authTimer:   null,
-  proTimer:    null,
-  barInt:      null,
-  initialized: false,
+  user:         null,
+  isPro:        false,
+  authTimer:    null,
+  proTimer:     null,
+  timerBarInt:  null,
+  initialized:  false,
 };
 
-function lpStore(k, v) { try { localStorage.setItem('lp_' + k, JSON.stringify(v)); } catch(e){} }
-function lpLoad(k, d)  { try { var v = localStorage.getItem('lp_' + k); return v != null ? JSON.parse(v) : d; } catch(e){ return d; } }
-function lpShow(id) { var e = document.getElementById(id); if(e) e.style.display = 'flex'; }
-function lpHide(id) { var e = document.getElementById(id); if(e) e.style.display = 'none'; }
+// ── Helpers ───────────────────────────────────────────────────────────────────
+function lpStore(key, val) { try { localStorage.setItem('lp_' + key, JSON.stringify(val)); } catch(e){} }
+function lpLoad(key, def)  { try { var v=localStorage.getItem('lp_' + key); return v!=null?JSON.parse(v):def; } catch(e){ return def; } }
 
-// ── Timer bar ─────────────────────────────────────────────────────────────────
-function lpRunBar(barId, cdId, ms, onDone) {
+function lpShow(id)  { var el=document.getElementById(id); if(el) el.style.display='flex'; }
+function lpHide(id)  { var el=document.getElementById(id); if(el) el.style.display='none'; }
+
+// Animated countdown timer bar
+function lpRunTimerBar(barId, countdownId, durationMs, onExpire) {
   var bar = document.getElementById(barId);
-  var cd  = document.getElementById(cdId);
-  var t0  = Date.now();
+  var countdown = document.getElementById(countdownId);
+  var start = Date.now();
   if (bar) bar.style.width = '100%';
   var iv = setInterval(function() {
-    var rem = Math.max(0, ms - (Date.now() - t0));
-    if (bar) bar.style.width = (rem / ms * 100) + '%';
-    if (cd)  cd.textContent = Math.ceil(rem / 1000) + 's remaining';
-    if (rem <= 0) { clearInterval(iv); onDone(); }
+    var elapsed = Date.now() - start;
+    var remaining = Math.max(0, durationMs - elapsed);
+    var pct = (remaining / durationMs) * 100;
+    if (bar) bar.style.width = pct + '%';
+    if (countdown) countdown.textContent = Math.ceil(remaining / 1000) + 's remaining';
+    if (remaining <= 0) {
+      clearInterval(iv);
+      onExpire();
+    }
   }, 200);
   return iv;
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Firebase Init ─────────────────────────────────────────────────────────────
+function lpInitFirebase() {
+  if (typeof firebase === 'undefined') {
+    console.warn('[LP Auth] Firebase not loaded');
+    return false;
+  }
+  if (firebase.apps && firebase.apps.length) return true; // already init
+  try {
+    firebase.initializeApp({
+      apiKey:     LP_CONFIG.firebaseApiKey,
+      authDomain: LP_CONFIG.firebaseAuthDomain,
+      projectId:  LP_CONFIG.firebaseProjectId,
+    });
+    return true;
+  } catch(e) {
+    console.warn('[LP Auth] Firebase init failed:', e.message);
+    return false;
+  }
+}
+
+// ── Auth flow entry point ─────────────────────────────────────────────────────
 function lpInit() {
   if (LP.initialized) return;
   LP.initialized = true;
 
+  // Check if user already logged in (stored session)
   var savedUser = lpLoad('user', null);
   LP.isPro = lpLoad('isPro', false);
 
-  if (savedUser && savedUser.sub) {
+  if (savedUser && savedUser.uid) {
+    // Already authenticated — restore session
     LP.user = savedUser;
-    lpShowBadge(savedUser);
-    if (LP.isPro) return;
-    var used = lpLoad('freeUsedMs', 0);
-    var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
-    if (rem <= 0) lpShowPro();
-    else lpStartFreeTimer(rem);
+    lpShowUserBadge(savedUser);
+
+    if (LP.isPro) {
+      // Pro subscriber — full access, no timer
+      console.log('[LP] Pro user restored:', savedUser.email);
+      return;
+    }
+
+    // Free logged-in user — check if free time already used
+    var usedMs = lpLoad('freeUsedMs', 0);
+    var remaining = Math.max(0, LP_CONFIG.freeLoggedInMs - usedMs);
+    if (remaining <= 0) {
+      // Already used free time, show upgrade
+      lpShowProWall();
+    } else {
+      // Resume free timer from where they left off
+      lpStartFreeLoggedInTimer(remaining);
+    }
     return;
   }
 
+  // Not logged in — start 30s free preview
   var previewUsed = lpLoad('previewUsedMs', 0);
-  var rem = Math.max(0, LP_CONFIG.freePreviewMs - previewUsed);
-  if (rem <= 0) lpShowAuth();
-  else lpStartPreview(rem);
+  var remaining = Math.max(0, LP_CONFIG.freePreviewMs - previewUsed);
+  if (remaining <= 0) {
+    lpShowAuthWall();
+  } else {
+    lpStartPreviewTimer(remaining);
+  }
 }
 
-function lpStartPreview(ms) {
-  LP.barInt = lpRunBar('lp-auth-timer-bar', 'lp-auth-countdown', ms, function() {
-    lpStore('previewUsedMs', LP_CONFIG.freePreviewMs);
-    lpShowAuth();
+// ── Preview timer (before login) ─────────────────────────────────────────────
+function lpStartPreviewTimer(durationMs) {
+  var start = Date.now();
+  LP.timerBarInt = lpRunTimerBar('lp-auth-timer-bar', 'lp-auth-countdown', durationMs, function() {
+    lpStore('previewUsedMs', LP_CONFIG.freePreviewMs); // mark as fully used
+    lpShowAuthWall();
   });
+  // Track elapsed time so refresh doesn't reset
   LP.authTimer = setInterval(function() {
-    lpStore('previewUsedMs', lpLoad('previewUsedMs', 0) + 200);
+    var used = lpLoad('previewUsedMs', 0) + 200;
+    lpStore('previewUsedMs', used);
   }, 200);
 }
 
-function lpShowAuth() {
-  clearInterval(LP.authTimer); clearInterval(LP.barInt);
-  // Render Google One Tap button
-  var configured = LP_CONFIG.googleClientId.indexOf('YOUR_GOOGLE') < 0;
-  if (configured && typeof google !== 'undefined' && google.accounts) {
-    google.accounts.id.initialize({
-      client_id: LP_CONFIG.googleClientId,
-      callback:  lpHandleGoogleToken,
-      auto_select: false,
-    });
-    google.accounts.id.renderButton(
-      document.getElementById('lp-google-btn'),
-      { theme: 'filled_black', size: 'large', text: 'continue_with', width: 340 }
-    );
-  } else if (!configured) {
-    // Demo mode — show a fake button
-    document.getElementById('lp-google-btn').innerHTML =
-      '<button class="lp-btn lp-btn-google" onclick="lpDemoSignIn()" style="width:100%;justify-content:center">' +
-      '<svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg>' +
-      ' Continue with Google</button>';
-  }
+function lpShowAuthWall() {
+  clearInterval(LP.authTimer);
+  clearInterval(LP.timerBarInt);
   lpShow('lp-auth-overlay');
 }
 
-// Called by Google GSI after user signs in
-function lpHandleGoogleToken(response) {
-  // Decode the JWT payload (no verification needed — we trust Google's redirect)
-  try {
-    var parts   = response.credential.split('.');
-    var payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
-    lpOnSignIn({
-      sub:     payload.sub,
-      email:   payload.email,
-      name:    payload.name,
-      picture: payload.picture,
-    });
-  } catch(e) {
-    console.error('[LP Auth] JWT decode failed:', e);
-  }
+// ── Post-login free timer ─────────────────────────────────────────────────────
+function lpStartFreeLoggedInTimer(durationMs) {
+  var start = Date.now();
+  LP.timerBarInt = lpRunTimerBar('lp-pro-timer-bar', 'lp-pro-countdown', durationMs, function() {
+    lpStore('freeUsedMs', LP_CONFIG.freeLoggedInMs);
+    lpShowProWall();
+  });
+  LP.proTimer = setInterval(function() {
+    var used = lpLoad('freeUsedMs', 0) + 200;
+    lpStore('freeUsedMs', used);
+  }, 200);
 }
 
-// Demo sign-in (when Google Client ID not configured)
-function lpDemoSignIn() {
-  lpOnSignIn({ sub: 'demo_' + Date.now(), email: 'demo@livermoreprotocol.com', name: 'Demo User', picture: '' });
+function lpShowProWall() {
+  clearInterval(LP.proTimer);
+  clearInterval(LP.timerBarInt);
+  lpShow('lp-pro-overlay');
+}
+
+// ── Google Sign-In ────────────────────────────────────────────────────────────
+function lpSignInGoogle() {
+  var btn = document.querySelector('.lp-btn-google');
+  if (btn) btn.textContent = 'Signing in…';
+
+  // Config not set → show instructions in console, use mock for demo
+  var isConfigured = LP_CONFIG.firebaseApiKey !== 'YOUR_FIREBASE_API_KEY';
+
+  if (!isConfigured) {
+    console.warn('[LP] Firebase not configured. See LP_CONFIG at top of auth script.');
+    // Demo mode: simulate successful login
+    lpOnSignIn({
+      uid:         'demo_' + Date.now(),
+      email:       'demo@livermoreprotocol.com',
+      displayName: 'Demo User',
+      photoURL:    '',
+    });
+    return;
+  }
+
+  if (!lpInitFirebase()) {
+    lpOnSignIn({ uid:'err', email:'auth-error@local', displayName:'Auth Error', photoURL:'' });
+    return;
+  }
+
+  var provider = new firebase.auth.GoogleAuthProvider();
+  provider.addScope('email');
+  provider.addScope('profile');
+
+  firebase.auth().signInWithPopup(provider)
+    .then(function(result) {
+      var u = result.user;
+      lpOnSignIn({
+        uid:         u.uid,
+        email:       u.email,
+        displayName: u.displayName,
+        photoURL:    u.photoURL,
+      });
+    })
+    .catch(function(err) {
+      console.error('[LP Auth] Sign-in error:', err.message);
+      var sub = document.querySelector('.lp-sub');
+      if (sub) sub.innerHTML = '<span style="color:#ff3355">Sign-in failed: ' + err.message + '</span>';
+      if (btn) btn.textContent = 'Continue with Google';
+    });
 }
 
 function lpOnSignIn(user) {
   LP.user = user;
   lpStore('user', user);
-  lpStore('previewUsedMs', LP_CONFIG.freePreviewMs);
-  lpStore('freeUsedMs', 0);
-  clearInterval(LP.authTimer); clearInterval(LP.barInt);
+  lpStore('previewUsedMs', LP_CONFIG.freePreviewMs); // preview done
+  lpStore('freeUsedMs', 0); // reset free logged-in timer
+
   lpHide('lp-auth-overlay');
-  lpShowBadge(user);
-  lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
+  lpShowUserBadge(user);
+
+  // Start 30s free logged-in timer
+  lpStartFreeLoggedInTimer(LP_CONFIG.freeLoggedInMs);
   console.log('[LP] Signed in:', user.email);
 }
 
-function lpStartFreeTimer(ms) {
-  LP.barInt = lpRunBar('lp-pro-timer-bar', 'lp-pro-countdown', ms, function() {
-    lpStore('freeUsedMs', LP_CONFIG.freeLoggedInMs);
-    lpShowPro();
-  });
-  LP.proTimer = setInterval(function() {
-    lpStore('freeUsedMs', lpLoad('freeUsedMs', 0) + 200);
-  }, 200);
-}
-
-function lpShowPro() {
-  clearInterval(LP.proTimer); clearInterval(LP.barInt);
-  lpShow('lp-pro-overlay');
-}
-
-function lpShowBadge(user) {
+function lpShowUserBadge(user) {
   lpShow('lp-user-badge');
   var photo = document.getElementById('lp-user-photo');
   var name  = document.getElementById('lp-user-name');
   var pro   = document.getElementById('lp-pro-badge');
-  if (photo) { photo.src = user.picture || ''; photo.style.display = user.picture ? 'block' : 'none'; }
-  if (name)  name.textContent = (user.name || user.email || '').split(' ')[0];
+  if (photo) { photo.src = user.photoURL || ''; photo.style.display = user.photoURL ? 'block' : 'none'; }
+  if (name)  name.textContent = (user.displayName || user.email || '').split(' ')[0];
   if (pro)   pro.style.display = LP.isPro ? 'inline' : 'none';
 }
 
 function lpSignOut() {
-  LP.user = null; LP.isPro = false;
-  lpStore('user', null); lpStore('isPro', false);
-  lpStore('previewUsedMs', 0); lpStore('freeUsedMs', 0);
-  clearInterval(LP.proTimer); clearInterval(LP.authTimer); clearInterval(LP.barInt);
+  LP.user = null;
+  LP.isPro = false;
+  lpStore('user', null);
+  lpStore('isPro', false);
+  lpStore('previewUsedMs', 0);
+  lpStore('freeUsedMs', 0);
   lpHide('lp-user-badge');
-  if (typeof google !== 'undefined' && google.accounts) google.accounts.id.disableAutoSelect();
+  clearInterval(LP.proTimer);
+  clearInterval(LP.authTimer);
+  clearInterval(LP.timerBarInt);
+
+  if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length) {
+    firebase.auth().signOut().catch(function(){});
+  }
+
+  // Restart preview timer
   LP.initialized = false;
   setTimeout(lpInit, 500);
 }
 
-// ── Stripe checkout ───────────────────────────────────────────────────────────
+// ── Stripe Checkout ───────────────────────────────────────────────────────────
 function lpStartCheckout() {
-  var configured = LP_CONFIG.stripePaymentLink.indexOf('YOUR_LINK') < 0;
-  if (!configured) {
-    alert('Add your Stripe Payment Link to LP_CONFIG.stripePaymentLink');
+  var isConfigured = LP_CONFIG.stripePaymentLink.indexOf('YOUR_PAYMENT_LINK') < 0;
+
+  if (!isConfigured) {
+    console.warn('[LP] Stripe not configured. Set LP_CONFIG.stripePaymentLink to your Stripe Payment Link.');
+    alert('Stripe not configured. Add your Stripe Payment Link to LP_CONFIG.stripePaymentLink');
     return;
   }
+
+  // Pass user email to Stripe pre-fill the checkout form
   var url = LP_CONFIG.stripePaymentLink;
-  if (LP.user && LP.user.email) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'prefilled_email=' + encodeURIComponent(LP.user.email);
-  window.open(url, '_blank');
-  // After payment, user clicks again to verify
-  var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) {
-    btn.textContent = '✓ Payment done — click to unlock PRO';
-    btn.onclick = lpVerifyPayment;
+  if (LP.user && LP.user.email) {
+    url += (url.indexOf('?') >= 0 ? '&' : '?') + 'prefilled_email=' + encodeURIComponent(LP.user.email);
   }
+
+  // Open Stripe in new tab
+  window.open(url, '_blank');
+
+  // Listen for return — Stripe sends to success_url which you configure
+  // For simplicity, poll localStorage for a 'pro' flag set by your success page
+  // OR use Stripe webhook → Railway API → set flag in your DB
+  // Simplest approach: user clicks "I've paid" to unlock
+  var btn = document.querySelector('.lp-btn-stripe');
+  if (btn) btn.innerHTML = '✓ Complete payment in new tab, then click here to unlock';
+  btn.onclick = lpVerifyPayment;
 }
 
 function lpVerifyPayment() {
-  // Trust-based for now. Add Stripe webhook → backend verification for production.
+  // In production: verify via Stripe webhook → your backend → set user as pro
+  // For now: trust the user (you can add webhook verification later)
   LP.isPro = true;
   lpStore('isPro', true);
-  clearInterval(LP.proTimer); clearInterval(LP.barInt);
+  clearInterval(LP.proTimer);
+  clearInterval(LP.timerBarInt);
   lpHide('lp-pro-overlay');
   var pro = document.getElementById('lp-pro-badge');
   if (pro) pro.style.display = 'inline';
-  console.log('[LP] User marked PRO');
+  console.log('[LP] User marked as PRO');
 }
 
 function lpDismissPro() {
+  // Allow dismissal but re-show after 5 minutes
   lpHide('lp-pro-overlay');
-  clearInterval(LP.proTimer); clearInterval(LP.barInt);
-  setTimeout(lpShowPro, 5 * 60 * 1000); // re-show in 5 min
+  clearInterval(LP.proTimer);
+  clearInterval(LP.timerBarInt);
+  setTimeout(lpShowProWall, 5 * 60 * 1000);
 }
 
-// ── Start ─────────────────────────────────────────────────────────────────────
+// Start auth flow — called here because lpInit is defined in this script block
 lpInit();
 
 </script>

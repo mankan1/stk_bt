@@ -423,6 +423,7 @@ select:focus, input:focus { border-color:var(--blue); }
     <button class="lp-btn lp-btn-stripe" onclick="lpStartCheckout()">
       ⚡ UPGRADE NOW — $29/mo
     </button>
+
     <div class="lp-countdown" id="lp-pro-countdown"></div>
   </div>
 </div>
@@ -3151,92 +3152,61 @@ function lpSignOut() {
   setTimeout(lpInit, 500);
 }
 
+// ── Stripe checkout ───────────────────────────────────────────────────────────
 function lpStartCheckout() {
   var configured = LP_CONFIG.stripePaymentLink.indexOf('YOUR_LINK') < 0;
-  if (!configured) { alert('Add your Stripe Payment Link to LP_CONFIG.stripePaymentLink'); return; }
-
-  // Must be logged in — pro status is tied to verified email
-  if (!LP.user || !LP.user.email) {
-    alert('Please sign in with Google first, then upgrade.');
+  if (!configured) {
+    alert('Add your Stripe Payment Link to LP_CONFIG.stripePaymentLink');
     return;
   }
-
   var url = LP_CONFIG.stripePaymentLink;
-  url += (url.indexOf('?') >= 0 ? '&' : '?') + 'prefilled_email=' + encodeURIComponent(LP.user.email);
+  if (LP.user && LP.user.email) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'prefilled_email=' + encodeURIComponent(LP.user.email);
   window.open(url, '_blank');
-
-  // Disable button and start polling — do NOT grant PRO here
+  // After payment, user clicks again to verify
   var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) { btn.textContent = '\u23f3 Waiting for payment...'; btn.disabled = true; }
-  lpPollForPro(0);
-}
-
-function lpPollForPro(attempts) {
-  var MAX = 60; // 3 min at 3s intervals
-  var btn = document.querySelector('.lp-btn-stripe');
-  if (attempts >= MAX) {
-    if (btn) { btn.textContent = '\u2713 Check payment status'; btn.disabled = false; btn.onclick = lpVerifyPayment; }
-    return;
+  if (btn) {
+    btn.textContent = '✓ Payment done — click to unlock PRO';
+    btn.onclick = lpVerifyPayment;
   }
-  var token = lpLoad('sessionToken', null);
-  var email = LP.user && LP.user.email;
-  if (!email) return;
-  var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-  var url = LP_CONFIG.apiBase + '/api/check-pro?email=' + encodeURIComponent(email);
-  fetch(url, { headers: headers })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (data.is_pro) {
-        lpGrantPro();
-      } else {
-        var secsLeft = (MAX - attempts) * 3;
-        if (btn) btn.textContent = '\u23f3 Verifying... (' + secsLeft + 's)';
-        setTimeout(function() { lpPollForPro(attempts + 1); }, 3000);
-      }
-    })
-    .catch(function() {
-      // Backend unreachable — retry silently, never grant PRO on error
-      setTimeout(function() { lpPollForPro(attempts + 1); }, 3000);
-    });
 }
 
 async function lpVerifyPayment() {
-  // Manual fallback check when polling timed out
+  // Check backend to confirm payment actually processed via Stripe webhook
   var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) { btn.textContent = 'Verifying...'; btn.disabled = true; }
-  var token = lpLoad('sessionToken', null);
-  var email = LP.user && LP.user.email;
-  if (!email) { if (btn) { btn.textContent = '\u2713 Check payment status'; btn.disabled = false; } return; }
+  if (btn) btn.textContent = 'Verifying payment...';
   try {
+    var token = lpLoad('sessionToken', null);
+    var email = LP.user && LP.user.email;
     var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-    var resp = await fetch(LP_CONFIG.apiBase + '/api/check-pro?email=' + encodeURIComponent(email), { headers: headers });
+    var url = LP_CONFIG.apiBase + '/api/check-pro' + (email ? '?email=' + encodeURIComponent(email) : '');
+    var resp = await fetch(url, { headers: headers });
     var data = await resp.json();
     if (data.is_pro) {
-      lpGrantPro();
+      LP.isPro = true;
+      lpStore('isPro', true);
+      clearInterval(LP.proTimer); clearInterval(LP.barInt);
+      lpHide('lp-pro-overlay');
+      var pro = document.getElementById('lp-pro-badge');
+      if (pro) pro.style.display = 'inline';
+      console.log('[LP] Backend confirmed PRO ✓');
     } else {
-      if (btn) {
-        btn.textContent = 'Not confirmed yet \u2014 retry in 10s';
-        btn.disabled = true;
-        setTimeout(function() { if (btn) { btn.textContent = '\u2713 Check payment status'; btn.disabled = false; btn.onclick = lpVerifyPayment; } }, 10000);
-      }
+      // Payment not yet confirmed — Stripe webhook may take a few seconds
+      if (btn) btn.textContent = 'Not confirmed yet — wait 10s and try again';
+      setTimeout(function() {
+        if (btn) {
+          btn.textContent = '✓ Check payment status';
+          btn.onclick = lpVerifyPayment;
+        }
+      }, 10000);
     }
   } catch(e) {
-    // Backend unreachable — show error, do NOT grant PRO
-    console.warn('[LP] Backend unreachable:', e.message);
-    if (btn) { btn.textContent = 'Server error \u2014 try again'; btn.disabled = false; btn.onclick = lpVerifyPayment; }
+    // Backend unreachable — fall back to trust-based
+    console.warn('[LP] Backend unreachable, granting PRO locally:', e.message);
+    LP.isPro = true;
+    lpStore('isPro', true);
+    clearInterval(LP.proTimer); clearInterval(LP.barInt);
+    lpHide('lp-pro-overlay');
   }
-}
-
-function lpGrantPro() {
-  LP.isPro = true;
-  lpStore('isPro', true);
-  clearInterval(LP.proTimer); clearInterval(LP.barInt);
-  lpHide('lp-pro-overlay');
-  var pro = document.getElementById('lp-pro-badge');
-  if (pro) pro.style.display = 'inline';
-  var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) { btn.textContent = '\u26a1 UPGRADE NOW \u2014 $29/mo'; btn.disabled = false; btn.onclick = lpStartCheckout; }
-  console.log('[LP] PRO activated \u2713');
 }
 
 

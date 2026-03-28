@@ -346,12 +346,9 @@ select:focus, input:focus { border-color:var(--blue); }
   color:#fff;
 }
 .lp-btn-stripe:hover { transform:translateY(-1px); box-shadow:0 4px 20px rgba(99,91,255,.4); }
-.lp-btn-skip {
-  background:transparent; color:#3a6080;
-  font-size:10px; letter-spacing:1px; padding:8px;
-  border:1px solid #1a3050; width:auto; padding:8px 20px;
-}
-.lp-btn-skip:hover { color:#7090b0; border-color:#2a4060; }
+.lp-btn-already { background:transparent; border:1px solid #1a3050; color:#7090b0; margin-top:8px; font-size:11px; padding:6px 16px; width:auto; }
+.lp-btn-already:hover { color:#c8d8e8; border-color:#2a4060; }
+
 .lp-timer-bar-wrap {
   height:3px; background:#0a1520; border-radius:2px;
   position:absolute; top:0; left:0; right:0; overflow:hidden;
@@ -429,8 +426,8 @@ select:focus, input:focus { border-color:var(--blue); }
       ⚡ UPGRADE NOW — $29/mo
     </button>
     <br>
-    <button class="lp-btn lp-btn-skip" onclick="lpDismissPro()">
-      Continue with limited access
+    <button class="lp-btn lp-btn-already" onclick="lpAlreadySubscribed()">
+      Already subscribed? Restore access
     </button>
     <div class="lp-countdown" id="lp-pro-countdown"></div>
   </div>
@@ -2973,21 +2970,14 @@ function lpInit() {
   if (savedUser && savedUser.sub) {
     LP.user = savedUser;
     lpShowBadge(savedUser);
-
+    // Always re-verify pro status with backend on page load (catches cancellations)
     if (savedUser.email) {
-      // Always verify PRO status from backend — source of truth
       lpCheckProStatus(savedUser.email).then(function() {
-        if (LP.isPro) {
-          // PRO confirmed — clear any stale free-timer state and hide overlay
-          lpStore('freeUsedMs', 0);
-          clearInterval(LP.proTimer); clearInterval(LP.barInt);
-          lpHide('lp-pro-overlay');
-        } else {
-          // Not PRO — check remaining free time
+        if (!LP.isPro) {
           var used = lpLoad('freeUsedMs', 0);
           var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
           if (rem <= 0) lpShowPro();
-          // else timer already started inside lpCheckProStatus
+          // else timer already started inside lpCheckProStatus fallback
         }
       });
     } else {
@@ -3110,40 +3100,41 @@ async function lpCheckProStatus(email) {
   try {
     var token = lpLoad('sessionToken', null);
     var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-    // Always pass email — works even when session token has expired
+
+    // Always send email as query param — works even if session token expired
     if (!email && LP.user) email = LP.user.email;
-    var url = LP_CONFIG.apiBase + '/api/check-pro' + (email ? '?email=' + encodeURIComponent(email) : '');
+    var url = LP_CONFIG.apiBase + '/api/check-pro';
+    if (email) url += '?email=' + encodeURIComponent(email);
+
+    console.log('[LP] Checking PRO status for:', email, 'API:', LP_CONFIG.apiBase);
+
     var resp = await fetch(url, { headers: headers });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var data = await resp.json();
+
+    console.log('[LP] PRO check result:', data);
+
     LP.isPro = data.is_pro;
     lpStore('isPro', data.is_pro);
+
     if (LP.isPro) {
-      // PRO confirmed — clear stale timer state
-      lpStore('freeUsedMs', 0);
       clearInterval(LP.proTimer); clearInterval(LP.barInt);
       lpHide('lp-pro-overlay');
       var pro = document.getElementById('lp-pro-badge');
       if (pro) pro.style.display = 'inline';
     } else {
-      var used = lpLoad('freeUsedMs', 0);
-      var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
-      if (rem > 0) lpStartFreeTimer(rem);
-      else lpShowPro();
+      lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
     }
   } catch(e) {
-    console.warn('[LP] Pro check failed:', e.message);
-    // Backend unreachable — trust localStorage, don't punish PRO users
+    console.warn('[LP] Pro check failed:', e.message, '| API base:', LP_CONFIG.apiBase);
+    // Backend unreachable — give benefit of doubt if locally stored as PRO
     if (lpLoad('isPro', false)) {
       LP.isPro = true;
       lpHide('lp-pro-overlay');
       var pro = document.getElementById('lp-pro-badge');
       if (pro) pro.style.display = 'inline';
     } else {
-      var used = lpLoad('freeUsedMs', 0);
-      var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
-      if (rem > 0) lpStartFreeTimer(rem);
-      else lpShowPro();
+      lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
     }
   }
 }
@@ -3184,75 +3175,98 @@ function lpSignOut() {
   setTimeout(lpInit, 500);
 }
 
-// ── Stripe checkout ───────────────────────────────────────────────────────────
+// ── Stripe checkout ───────────────────────────────────────────────────────────────────────────────
 function lpStartCheckout() {
   var configured = LP_CONFIG.stripePaymentLink.indexOf('YOUR_LINK') < 0;
-  if (!configured) {
-    alert('Add your Stripe Payment Link to LP_CONFIG.stripePaymentLink');
+  if (!configured) { alert('Add your Stripe Payment Link to LP_CONFIG.stripePaymentLink'); return; }
+  if (!LP.user || !LP.user.email) { alert('Please sign in with Google first, then upgrade.'); return; }
+  var url = LP_CONFIG.stripePaymentLink + (LP_CONFIG.stripePaymentLink.indexOf('?') >= 0 ? '&' : '?') + 'prefilled_email=' + encodeURIComponent(LP.user.email);
+  window.open(url, '_blank');
+  var btn = document.querySelector('.lp-btn-stripe');
+  if (btn) { btn.textContent = '⏳ Complete payment in new tab…'; btn.disabled = true; }
+  LP._pollStart = Date.now();
+  setTimeout(function() { lpPollForPro(0); }, 3000);
+}
+
+function lpPollForPro(attempts) {
+  var MAX_MS = 5 * 60 * 1000;
+  var btn = document.querySelector('.lp-btn-stripe');
+  var elapsed = Date.now() - (LP._pollStart || Date.now());
+  if (elapsed >= MAX_MS) {
+    if (btn) { btn.textContent = '✓ I completed payment — verify now'; btn.disabled = false; btn.onclick = lpVerifyPayment; }
     return;
   }
-  var url = LP_CONFIG.stripePaymentLink;
-  if (LP.user && LP.user.email) url += (url.indexOf('?') >= 0 ? '&' : '?') + 'prefilled_email=' + encodeURIComponent(LP.user.email);
-  window.open(url, '_blank');
-  // After payment, user clicks again to verify
-  var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) {
-    btn.textContent = '✓ Payment done — click to unlock PRO';
-    btn.onclick = lpVerifyPayment;
-  }
+  var token = lpLoad('sessionToken', null);
+  var email = (LP.user && LP.user.email) || '';
+  if (!email) return;
+  var secsLeft = Math.ceil((MAX_MS - elapsed) / 1000);
+  if (btn) btn.textContent = '⏳ Waiting for Stripe… (' + secsLeft + 's)';
+  var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+  fetch(LP_CONFIG.apiBase + '/api/check-pro?email=' + encodeURIComponent(email), { headers: headers })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.is_pro) { lpGrantPro(); }
+      else { setTimeout(function() { lpPollForPro(attempts + 1); }, 3000); }
+    })
+    .catch(function() { setTimeout(function() { lpPollForPro(attempts + 1); }, 3000); });
 }
 
 async function lpVerifyPayment() {
-  // Check backend to confirm payment actually processed via Stripe webhook
   var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) btn.textContent = 'Verifying payment...';
+  if (btn) { btn.textContent = 'Verifying…'; btn.disabled = true; }
+  var token = lpLoad('sessionToken', null);
+  var email = (LP.user && LP.user.email) || '';
+  if (!email) { if (btn) { btn.textContent = '✓ I completed payment — verify now'; btn.disabled = false; } return; }
   try {
-    var token = lpLoad('sessionToken', null);
-    var email = LP.user && LP.user.email;
     var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-    var url = LP_CONFIG.apiBase + '/api/check-pro' + (email ? '?email=' + encodeURIComponent(email) : '');
-    var resp = await fetch(url, { headers: headers });
-    var data = await resp.json();
-    if (data.is_pro) {
-      LP.isPro = true;
-      lpStore('isPro', true);
-      clearInterval(LP.proTimer); clearInterval(LP.barInt);
-      lpHide('lp-pro-overlay');
-      var pro = document.getElementById('lp-pro-badge');
-      if (pro) pro.style.display = 'inline';
-      console.log('[LP] Backend confirmed PRO ✓');
-    } else {
-      // Payment not yet confirmed — Stripe webhook may take a few seconds
-      if (btn) btn.textContent = 'Not confirmed yet — wait 10s and try again';
-      setTimeout(function() {
-        if (btn) {
-          btn.textContent = '✓ Check payment status';
-          btn.onclick = lpVerifyPayment;
-        }
-      }, 10000);
+    var data = await (await fetch(LP_CONFIG.apiBase + '/api/check-pro?email=' + encodeURIComponent(email), { headers: headers })).json();
+    if (data.is_pro) { lpGrantPro(); }
+    else {
+      if (btn) { btn.textContent = 'Not confirmed — retrying…'; btn.disabled = true; }
+      LP._pollStart = Date.now();
+      setTimeout(function() { lpPollForPro(0); }, 3000);
     }
   } catch(e) {
-    // Backend unreachable — fall back to trust-based
-    console.warn('[LP] Backend unreachable, granting PRO locally:', e.message);
-    LP.isPro = true;
-    lpStore('isPro', true);
-    clearInterval(LP.proTimer); clearInterval(LP.barInt);
-    lpHide('lp-pro-overlay');
+    console.warn('[LP] Verify error:', e.message);
+    if (btn) { btn.textContent = 'Server error — try again'; btn.disabled = false; btn.onclick = lpVerifyPayment; }
   }
 }
 
-function lpDismissPro() {
-  lpHide('lp-pro-overlay');
+function lpAlreadySubscribed() {
+  if (!LP.user || !LP.user.email) { alert('Please sign in with Google using your subscription email.'); return; }
+  var btn = document.querySelector('.lp-btn-already');
+  if (btn) { btn.textContent = 'Checking…'; btn.disabled = true; }
+  var token = lpLoad('sessionToken', null);
+  var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
+  fetch(LP_CONFIG.apiBase + '/api/check-pro?email=' + encodeURIComponent(LP.user.email), { headers: headers })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (data.is_pro) {
+        lpGrantPro();
+      } else {
+        if (btn) { btn.textContent = 'No active subscription found for ' + LP.user.email; btn.disabled = false; }
+        setTimeout(function() { if (btn) { btn.textContent = 'Already subscribed? Restore access'; btn.disabled = false; } }, 4000);
+      }
+    })
+    .catch(function(e) {
+      console.warn('[LP] Restore failed:', e.message);
+      if (btn) { btn.textContent = 'Server error — try again'; btn.disabled = false; }
+    });
+}
+
+function lpGrantPro() {
+  LP.isPro = true;
+  lpStore('isPro', true);
   clearInterval(LP.proTimer); clearInterval(LP.barInt);
-  setTimeout(lpShowPro, 5 * 60 * 1000); // re-show in 5 min
+  lpHide('lp-pro-overlay');
+  var pro = document.getElementById('lp-pro-badge');
+  if (pro) pro.style.display = 'inline';
+  var btn = document.querySelector('.lp-btn-stripe');
+  if (btn) { btn.textContent = '⚡ UPGRADE NOW — $29/mo'; btn.disabled = false; btn.onclick = lpStartCheckout; }
+  console.log('[LP] PRO activated ✓');
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-console.log('[LP] Config:', {
-  apiBase: window.LP_API_BASE || '(empty - will use same origin)',
-  googleConfigured: (window.LP_GOOGLE_CLIENT_ID || '').indexOf('YOUR_GOOGLE') < 0,
-  stripeConfigured: (window.LP_STRIPE_LINK || '').indexOf('YOUR_LINK') < 0,
-});
 lpInit();
 
 </script>

@@ -93,12 +93,10 @@ def verify_stripe_signature(payload_bytes, sig_header):
         timestamp = parts.get('t', '')
         v1_sig    = parts.get('v1', '')
         signed_payload = f'{timestamp}.'.encode() + payload_bytes
-        # Strip the 'whsec_' prefix correctly — lstrip() strips chars not strings
-        secret = STRIPE_WEBHOOK_SECRET
-        if secret.startswith('whsec_'):
-            secret = secret[6:]  # remove exactly 6 chars: w-h-s-e-c-_
         expected = hmac.new(
-            secret.encode(),
+            STRIPE_WEBHOOK_SECRET.lstrip('whsec_').encode()
+            if STRIPE_WEBHOOK_SECRET.startswith('whsec_')
+            else STRIPE_WEBHOOK_SECRET.encode(),
             signed_payload, hashlib.sha256
         ).hexdigest()
         # Constant-time compare
@@ -254,10 +252,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/stripe-webhook':
             sig = self.headers.get('Stripe-Signature', '')
 
-            print(f'[webhook] Received event, body={len(body)}b, sig={sig[:30]}...')
             if not verify_stripe_signature(body, sig):
-                print('[webhook] Invalid Stripe signature — check LP_STRIPE_WEBHOOK_SECRET env var')
-                print(f'[webhook] Secret configured: {bool(STRIPE_WEBHOOK_SECRET)}, starts whsec_: {STRIPE_WEBHOOK_SECRET.startswith("whsec_")}')
+                print('[webhook] Invalid Stripe signature')
                 self.send_json(400, {'error': 'Invalid signature'})
                 return
 

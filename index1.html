@@ -1003,43 +1003,52 @@ function yhDTE() {
   return opex?Math.max(1,Math.round((opex-now)/86400000)):14;
 }
 
-// CORS proxy list — multiple options, rotated on failure
-// Raw Yahoo URL is passed clean; each proxy handler encodes as needed
+// Multiple CORS proxies — try in order until one works
+// CORS proxy list — tried in order, winner promoted to [0]
 var YH_PROXIES = [
-  { url: 'https://api.allorigins.win/raw?url=',         encode: true,  parse: 'raw'  },
-  { url: 'https://api.allorigins.win/get?url=',         encode: true,  parse: 'wrap' },
-  { url: 'https://thingproxy.freeboard.io/fetch/',      encode: false, parse: 'raw'  },
-  { url: 'https://api.codetabs.com/v1/proxy?quest=',    encode: false, parse: 'raw'  },
-  { url: 'https://corsproxy.io/?url=',                  encode: true,  parse: 'raw'  },
-  { url: 'https://proxy.cors.sh/',                      encode: false, parse: 'raw'  },
-  { url: 'https://crossorigin.me/',                     encode: false, parse: 'raw'  },
+  'https://api.allorigins.win/raw?url=',
+  'https://api.allorigins.win/get?url=',       // allorigins JSON-wrapped variant
+  'https://api.codetabs.com/v1/proxy?quest=',
+  'https://corsproxy.io/?url=',
 ];
 
+// Parse whatever a proxy returns into a Yahoo chart result object
 function yhParseResponse(json) {
-  if (!json) return null;
   // Direct Yahoo response
-  if (json.chart && json.chart.result) return json.chart.result[0] || null;
-  // allorigins /get wraps in {contents:'...'}
-  if (typeof json.contents === 'string') {
-    try { var p = JSON.parse(json.contents); if (p && p.chart) return p.chart.result && p.chart.result[0]; } catch(e){}
+  if (json && json.chart && json.chart.result) return json.chart.result[0] || null;
+  // allorigins /raw — sometimes returns {status:{...}, contents:'...'} 
+  if (json && typeof json.contents === 'string') {
+    try {
+      var inner = JSON.parse(json.contents);
+      if (inner && inner.chart && inner.chart.result) return inner.chart.result[0] || null;
+    } catch(e) {}
   }
-  if (json.contents && typeof json.contents === 'object' && json.contents.chart)
-    return json.contents.chart.result && json.contents.chart.result[0];
+  // allorigins /get returns {status, contents}
+  if (json && json.contents) {
+    var raw = json.contents;
+    if (typeof raw === 'object' && raw.chart) return raw.chart.result && raw.chart.result[0];
+    if (typeof raw === 'string') {
+      try { var p2 = JSON.parse(raw); if (p2.chart) return p2.chart.result && p2.chart.result[0]; } catch(e){}
+    }
+  }
   return null;
 }
 
 function yhBuildUrl(sym, interval, range) {
-  // Do NOT pre-encode sym — encodeURIComponent below handles it cleanly
-  // Pre-encoding = leads to double-encoding (%3D -> %253D) via the proxy layer
-  return 'https://query1.finance.yahoo.com/v8/finance/chart/'
-    + encodeURIComponent(sym)
+  // query2 is less aggressive with rate-limiting than query1
+  return 'https://query2.finance.yahoo.com/v8/finance/chart/'
+    + sym.replace('=', '%3D').replace('^', '%5E').replace('-', '%2D')
     + '?interval=' + interval
     + '&range=' + range
-    + '&includePrePost=false';
+    + '&includePrePost=false'
+    + '&corsDomain=finance.yahoo.com';
 }
 
 function yhProxyUrl(proxy, rawUrl) {
-  return proxy.encode ? proxy.url + encodeURIComponent(rawUrl) : proxy.url + rawUrl;
+  if (proxy.indexOf('allorigins') >= 0) return proxy + encodeURIComponent(rawUrl);
+  if (proxy.indexOf('codetabs')   >= 0) return proxy + rawUrl;
+  if (proxy.indexOf('corsproxy')  >= 0) return proxy + encodeURIComponent(rawUrl);
+  return proxy + encodeURIComponent(rawUrl);
 }
 
 async function yhFetch(sym, interval, range) {
@@ -1049,37 +1058,33 @@ async function yhFetch(sym, interval, range) {
     try {
       var proxyUrl = yhProxyUrl(YH_PROXIES[pi], rawUrl);
       var controller = new AbortController();
-      var tId = setTimeout(function(){ controller.abort(); }, 12000);
-      var res = await fetch(proxyUrl, {
-        signal: controller.signal,
-        headers: { 'Accept': 'application/json' }
-      });
+      var tId = setTimeout(function(){ controller.abort(); }, 10000);
+      var res = await fetch(proxyUrl, { signal: controller.signal });
       clearTimeout(tId);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       var json = await res.json();
       var r = yhParseResponse(json);
-      if (!r) throw new Error('No chart result');
+      if (!r) throw new Error('No chart result in response');
       var ts = r.timestamp || r.timestamps;
       var q  = r.indicators && r.indicators.quote && r.indicators.quote[0];
       if (!ts || !q) throw new Error('Missing timestamps/quote');
       var bars = [];
       for (var i = 0; i < ts.length; i++) {
-        var o = q.open[i], c = q.close[i];
-        var h = q.high ? q.high[i] : null, l = q.low ? q.low[i] : null;
+        if (q.open == null || q.close == null) continue;
+        var o = q.open[i], c = q.close[i], h = q.high ? q.high[i] : null, l = q.low ? q.low[i] : null;
         if (o == null || c == null) continue;
         bars.push({
           t: ts[i] * 1000,
           o: +o.toFixed(4),
-          h: +(h != null ? h : Math.max(o,c)).toFixed(4),
-          l: +(l != null ? l : Math.min(o,c)).toFixed(4),
+          h: +(h != null ? h : Math.max(o, c)).toFixed(4),
+          l: +(l != null ? l : Math.min(o, c)).toFixed(4),
           c: +c.toFixed(4),
           v: (q.volume && q.volume[i]) || 0
         });
       }
-      if (bars.length === 0) throw new Error('Zero valid bars');
-      // Promote working proxy to front
+      if (bars.length === 0) throw new Error('Zero valid bars parsed');
       if (pi > 0) { var tmp = YH_PROXIES[0]; YH_PROXIES[0] = YH_PROXIES[pi]; YH_PROXIES[pi] = tmp; }
-      console.log('[Yahoo] proxy ' + pi + ' OK: ' + sym + ' ' + bars.length + ' bars');
+      console.log('[Yahoo] proxy:' + pi + ' OK ' + sym + ' ' + bars.length + ' bars');
       return { bars: bars, meta: r.meta || {} };
     } catch(e) {
       lastErr = e;
@@ -1096,7 +1101,7 @@ async function yhQuickPrice(sym) {
     try {
       var proxyUrl = yhProxyUrl(YH_PROXIES[pi], rawUrl);
       var controller = new AbortController();
-      var tId = setTimeout(function(){ controller.abort(); }, 8000);
+      var tId = setTimeout(function(){ controller.abort(); }, 6000);
       var res = await fetch(proxyUrl, { signal: controller.signal });
       clearTimeout(tId);
       if (!res.ok) continue;
@@ -2051,7 +2056,7 @@ async function univQuote(sym) {
   try {
     var rawUrl = yhBuildUrl(sym, '1d', '5d');
     var proxyUrl = yhProxyUrl(YH_PROXIES[0], rawUrl);
-    var res = await fetch(proxyUrl, { headers: { 'Accept': 'application/json' } });
+    var res = await fetch(proxyUrl);
     var json = await res.json();
     var r = yhParseResponse(json);
     if (!r) return null;

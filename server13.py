@@ -1,15 +1,11 @@
 """
 Livermore Protocol — Auth + Payment Backend
 Runs alongside the static dashboard on Railway.
-
 Endpoints:
-  POST /api/verify-google        → verify Google JWT, return session token
-  GET  /api/check-pro            → check if user is PRO subscriber
-  POST /api/stripe-webhook       → receive Stripe events, update DB
-  GET  /api/admin/subscribers    → list all subscribers (admin only)
-  GET  /api/admin/grant-pro      → manually grant PRO (admin only)
-  GET  /api/admin/revoke-pro     → manually revoke PRO (admin only)
-  GET  /health                   → health check
+  POST /api/verify-google   → verify Google JWT, return session token
+  GET  /api/check-pro       → check if user is PRO subscriber
+  POST /api/stripe-webhook  → receive Stripe events, update DB
+  GET  /health              → health check
 """
 
 import os, json, time, hmac, hashlib, sqlite3, urllib.request, urllib.error
@@ -17,11 +13,10 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
 
 # ── Config from Railway env vars ──────────────────────────────────────────────
-GOOGLE_CLIENT_ID      = os.environ.get('LP_GOOGLE_CLIENT_ID', '')
+GOOGLE_CLIENT_ID    = os.environ.get('LP_GOOGLE_CLIENT_ID', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('LP_STRIPE_WEBHOOK_SECRET', '')  # whsec_...
-ADMIN_SECRET          = os.environ.get('LP_ADMIN_SECRET', '')
-PORT                  = int(os.environ.get('PORT', 8080))
-DB_PATH               = os.environ.get('DB_PATH', '/data/subscribers.db')
+PORT                = int(os.environ.get('PORT', 8080))
+DB_PATH             = os.environ.get('DB_PATH', '/data/subscribers.db')
 
 # ── SQLite DB ─────────────────────────────────────────────────────────────────
 def init_db():
@@ -31,24 +26,24 @@ def init_db():
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS subscribers (
-            email                  TEXT PRIMARY KEY,
-            google_sub             TEXT,
-            stripe_customer_id     TEXT,
+            email       TEXT PRIMARY KEY,
+            google_sub  TEXT,
+            stripe_customer_id  TEXT,
             stripe_subscription_id TEXT,
-            is_pro                 INTEGER DEFAULT 0,
-            created_at             REAL,
-            updated_at             REAL
+            is_pro      INTEGER DEFAULT 0,
+            created_at  REAL,
+            updated_at  REAL
         )
     ''')
     conn.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
-            token      TEXT PRIMARY KEY,
-            email      TEXT,
-            google_sub TEXT,
-            name       TEXT,
-            picture    TEXT,
-            created_at REAL,
-            expires_at REAL
+            token       TEXT PRIMARY KEY,
+            email       TEXT,
+            google_sub  TEXT,
+            name        TEXT,
+            picture     TEXT,
+            created_at  REAL,
+            expires_at  REAL
         )
     ''')
     conn.commit()
@@ -61,6 +56,10 @@ def get_db():
 
 # ── Google JWT verification ───────────────────────────────────────────────────
 def verify_google_jwt(credential):
+    """
+    Verify Google One Tap credential by calling Google's tokeninfo endpoint.
+    Returns payload dict or raises ValueError.
+    """
     try:
         url = f'https://oauth2.googleapis.com/tokeninfo?id_token={credential}'
         with urllib.request.urlopen(url, timeout=5) as r:
@@ -68,54 +67,49 @@ def verify_google_jwt(credential):
     except urllib.error.HTTPError as e:
         raise ValueError(f'Google tokeninfo failed: {e.code}')
 
+    # Verify audience matches our client ID
     if GOOGLE_CLIENT_ID and payload.get('aud') != GOOGLE_CLIENT_ID:
         raise ValueError('Token audience mismatch')
 
+    # Verify token not expired
     if int(payload.get('exp', 0)) < time.time():
         raise ValueError('Token expired')
 
     return payload
 
 def make_session_token(email, sub):
+    """Generate a simple session token."""
     raw = f'{email}:{sub}:{time.time()}:{os.urandom(16).hex()}'
     return hashlib.sha256(raw.encode()).hexdigest()
 
 # ── Stripe webhook verification ───────────────────────────────────────────────
 def verify_stripe_signature(payload_bytes, sig_header):
+    """Verify Stripe webhook signature (HMAC-SHA256)."""
     if not STRIPE_WEBHOOK_SECRET:
-        return True  # Skip in dev if not configured
+        return True  # Skip verification if secret not configured (dev mode)
     try:
-        parts   = dict(x.split('=', 1) for x in sig_header.split(','))
+        # sig_header format: t=timestamp,v1=signature,...
+        parts = dict(x.split('=', 1) for x in sig_header.split(','))
         timestamp = parts.get('t', '')
         v1_sig    = parts.get('v1', '')
         signed_payload = f'{timestamp}.'.encode() + payload_bytes
-
-        # Fix: strip 'whsec_' prefix correctly — slice not lstrip
+        # Strip the 'whsec_' prefix correctly — lstrip() strips chars not strings
         secret = STRIPE_WEBHOOK_SECRET
         if secret.startswith('whsec_'):
-            secret = secret[6:]
-
+            secret = secret[6:]  # remove exactly 6 chars: w-h-s-e-c-_
         expected = hmac.new(
             secret.encode(),
-            signed_payload,
-            hashlib.sha256
+            signed_payload, hashlib.sha256
         ).hexdigest()
-
+        # Constant-time compare
         if not hmac.compare_digest(expected, v1_sig):
             return False
+        # Reject old events (5 min tolerance)
         if abs(time.time() - int(timestamp)) > 300:
             return False
         return True
-    except Exception as e:
-        print(f'[webhook] Signature error: {e}')
+    except Exception:
         return False
-
-# ── Admin auth helper ─────────────────────────────────────────────────────────
-def is_admin(headers):
-    if not ADMIN_SECRET:
-        return False
-    auth = headers.get('Authorization', '').replace('Bearer ', '').strip()
-    return auth == ADMIN_SECRET
 
 # ── HTTP Handler ──────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
@@ -149,14 +143,14 @@ class Handler(BaseHTTPRequestHandler):
         path   = parsed.path
         qs     = parse_qs(parsed.query)
 
-        # ── GET /health ───────────────────────────────────────────────────────
         if path == '/health':
             self.send_json(200, {'status': 'ok', 'time': time.time()})
 
-        # ── GET /api/check-pro ────────────────────────────────────────────────
         elif path == '/api/check-pro':
+            # Check by session token (header) or email (query param)
             token = self.headers.get('Authorization', '').replace('Bearer ', '').strip()
             email = qs.get('email', [None])[0]
+
             db = get_db()
             try:
                 # Try session token first
@@ -175,7 +169,7 @@ class Handler(BaseHTTPRequestHandler):
                         })
                         return
 
-                # Fall back to email lookup (works even if session expired)
+                # Try email lookup
                 if email:
                     row = db.execute(
                         'SELECT email, is_pro FROM subscribers WHERE email=?', (email,)
@@ -185,82 +179,6 @@ class Handler(BaseHTTPRequestHandler):
                         return
 
                 self.send_json(200, {'is_pro': False})
-            finally:
-                db.close()
-
-        # ── GET /api/admin/subscribers ────────────────────────────────────────
-        elif path == '/api/admin/subscribers':
-            if not is_admin(self.headers):
-                self.send_json(401, {'error': 'Unauthorized'})
-                return
-            db = get_db()
-            try:
-                rows = db.execute(
-                    'SELECT s.email, s.is_pro, s.stripe_customer_id, s.stripe_subscription_id, '
-                    's.created_at, s.updated_at, '
-                    'COUNT(sess.token) as session_count, MAX(sess.created_at) as last_login '
-                    'FROM subscribers s '
-                    'LEFT JOIN sessions sess ON s.email = sess.email '
-                    'GROUP BY s.email ORDER BY s.updated_at DESC'
-                ).fetchall()
-                self.send_json(200, {
-                    'total':      len(rows),
-                    'pro_count':  sum(1 for r in rows if r['is_pro']),
-                    'subscribers': [{
-                        'email':           r['email'],
-                        'is_pro':          bool(r['is_pro']),
-                        'stripe_customer': r['stripe_customer_id'],
-                        'stripe_sub':      r['stripe_subscription_id'],
-                        'joined':          r['created_at'],
-                        'updated':         r['updated_at'],
-                        'last_login':      r['last_login'],
-                        'sessions':        r['session_count'],
-                    } for r in rows]
-                })
-            finally:
-                db.close()
-
-        # ── GET /api/admin/grant-pro ──────────────────────────────────────────
-        elif path == '/api/admin/grant-pro':
-            if not is_admin(self.headers):
-                self.send_json(401, {'error': 'Unauthorized'})
-                return
-            email = qs.get('email', [None])[0]
-            if not email:
-                self.send_json(400, {'error': 'Missing ?email='})
-                return
-            db = get_db()
-            try:
-                now = time.time()
-                db.execute(
-                    'INSERT INTO subscribers (email, is_pro, created_at, updated_at) VALUES (?,1,?,?) '
-                    'ON CONFLICT(email) DO UPDATE SET is_pro=1, updated_at=excluded.updated_at',
-                    (email, now, now)
-                )
-                db.commit()
-                print(f'[admin] Granted PRO: {email}')
-                self.send_json(200, {'ok': True, 'email': email, 'is_pro': True})
-            finally:
-                db.close()
-
-        # ── GET /api/admin/revoke-pro ─────────────────────────────────────────
-        elif path == '/api/admin/revoke-pro':
-            if not is_admin(self.headers):
-                self.send_json(401, {'error': 'Unauthorized'})
-                return
-            email = qs.get('email', [None])[0]
-            if not email:
-                self.send_json(400, {'error': 'Missing ?email='})
-                return
-            db = get_db()
-            try:
-                db.execute(
-                    'UPDATE subscribers SET is_pro=0, updated_at=? WHERE email=?',
-                    (time.time(), email)
-                )
-                db.commit()
-                print(f'[admin] Revoked PRO: {email}')
-                self.send_json(200, {'ok': True, 'email': email, 'is_pro': False})
             finally:
                 db.close()
 
@@ -290,9 +208,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.send_json(400, {'error': 'Invalid token payload'})
                     return
 
-                db  = get_db()
+                db = get_db()
                 now = time.time()
                 try:
+                    # Upsert subscriber record
                     db.execute('''
                         INSERT INTO subscribers (email, google_sub, is_pro, created_at, updated_at)
                         VALUES (?, ?, 0, ?, ?)
@@ -301,6 +220,7 @@ class Handler(BaseHTTPRequestHandler):
                             updated_at=excluded.updated_at
                     ''', (email, sub, now, now))
 
+                    # Create session token (24h expiry)
                     token = make_session_token(email, sub)
                     db.execute('''
                         INSERT INTO sessions (token, email, google_sub, name, picture, created_at, expires_at)
@@ -308,7 +228,10 @@ class Handler(BaseHTTPRequestHandler):
                     ''', (token, email, sub, name, picture, now, now + 86400))
                     db.commit()
 
-                    row    = db.execute('SELECT is_pro FROM subscribers WHERE email=?', (email,)).fetchone()
+                    # Return token + pro status
+                    row = db.execute(
+                        'SELECT is_pro FROM subscribers WHERE email=?', (email,)
+                    ).fetchone()
                     is_pro = bool(row['is_pro']) if row else False
 
                     self.send_json(200, {
@@ -330,10 +253,11 @@ class Handler(BaseHTTPRequestHandler):
         # ── POST /api/stripe-webhook ──────────────────────────────────────────
         elif path == '/api/stripe-webhook':
             sig = self.headers.get('Stripe-Signature', '')
-            print(f'[webhook] Received event, body={len(body)}b')
 
+            print(f'[webhook] Received event, body={len(body)}b, sig={sig[:30]}...')
             if not verify_stripe_signature(body, sig):
-                print('[webhook] Invalid Stripe signature — check LP_STRIPE_WEBHOOK_SECRET')
+                print('[webhook] Invalid Stripe signature — check LP_STRIPE_WEBHOOK_SECRET env var')
+                print(f'[webhook] Secret configured: {bool(STRIPE_WEBHOOK_SECRET)}, starts whsec_: {STRIPE_WEBHOOK_SECRET.startswith("whsec_")}')
                 self.send_json(400, {'error': 'Invalid signature'})
                 return
 
@@ -341,15 +265,18 @@ class Handler(BaseHTTPRequestHandler):
                 event = json.loads(body)
                 etype = event.get('type', '')
                 obj   = event.get('data', {}).get('object', {})
+
                 print(f'[webhook] Event: {etype}')
 
                 db  = get_db()
                 now = time.time()
+
                 try:
                     if etype == 'checkout.session.completed':
-                        email   = obj.get('customer_details', {}).get('email') or obj.get('customer_email', '')
-                        cust_id = obj.get('customer', '')
-                        sub_id  = obj.get('subscription', '')
+                        # Payment succeeded — mark user as PRO
+                        email    = obj.get('customer_details', {}).get('email') or obj.get('customer_email', '')
+                        cust_id  = obj.get('customer', '')
+                        sub_id   = obj.get('subscription', '')
                         if email:
                             db.execute('''
                                 INSERT INTO subscribers (email, stripe_customer_id, stripe_subscription_id, is_pro, created_at, updated_at)
@@ -357,12 +284,14 @@ class Handler(BaseHTTPRequestHandler):
                                 ON CONFLICT(email) DO UPDATE SET
                                     stripe_customer_id=excluded.stripe_customer_id,
                                     stripe_subscription_id=excluded.stripe_subscription_id,
-                                    is_pro=1, updated_at=excluded.updated_at
+                                    is_pro=1,
+                                    updated_at=excluded.updated_at
                             ''', (email, cust_id, sub_id, now, now))
                             db.commit()
-                            print(f'[webhook] PRO activated: {email}')
+                            print(f'[webhook] ✓ PRO activated: {email}')
 
                     elif etype in ('customer.subscription.deleted', 'customer.subscription.paused'):
+                        # Subscription cancelled/paused — revoke PRO
                         cust_id = obj.get('customer', '')
                         if cust_id:
                             db.execute(
@@ -370,11 +299,12 @@ class Handler(BaseHTTPRequestHandler):
                                 (now, cust_id)
                             )
                             db.commit()
-                            print(f'[webhook] PRO revoked: customer {cust_id}')
+                            print(f'[webhook] PRO revoked for customer: {cust_id}')
 
                     elif etype == 'invoice.payment_failed':
+                        # Payment failed — optionally revoke (or give grace period)
                         cust_id = obj.get('customer', '')
-                        print(f'[webhook] Payment failed: customer {cust_id}')
+                        print(f'[webhook] Payment failed for customer: {cust_id} (not revoking yet)')
 
                 finally:
                     db.close()
@@ -382,7 +312,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(200, {'received': True})
 
             except Exception as e:
-                print(f'[webhook] Error: {e}')
+                print(f'[webhook] Error processing event: {e}')
                 self.send_json(200, {'received': True})  # Always 200 to Stripe
 
         else:
@@ -395,6 +325,5 @@ if __name__ == '__main__':
     print(f'[LP Backend] DB: {DB_PATH}')
     print(f'[LP Backend] Google Client ID: {GOOGLE_CLIENT_ID[:20]}...' if GOOGLE_CLIENT_ID else '[LP Backend] Google Client ID: NOT SET')
     print(f'[LP Backend] Stripe Webhook Secret: {"SET" if STRIPE_WEBHOOK_SECRET else "NOT SET"}')
-    print(f'[LP Backend] Admin Secret: {"SET" if ADMIN_SECRET else "NOT SET — admin endpoints disabled"}')
     server = HTTPServer(('0.0.0.0', PORT), Handler)
     server.serve_forever()

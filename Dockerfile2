@@ -1,18 +1,12 @@
 FROM nginx:alpine
 RUN apk add --no-cache bash
-
 COPY index.html /tmp/index.template.html
 COPY nginx.conf /etc/nginx/templates/default.conf.template
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
-
-# Remove default nginx site so our template is the only one
-RUN rm -f /etc/nginx/conf.d/default.conf
-
 ENV PORT=8080
 ENV LP_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
 ENV LP_STRIPE_LINK=https://buy.stripe.com/YOUR_LINK
 ENV LP_API_BASE=https://your-backend.up.railway.app
-
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

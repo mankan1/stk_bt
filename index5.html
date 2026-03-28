@@ -2923,14 +2923,16 @@ function renderScanner(tab) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 var LP_CONFIG = {
-  googleClientId:    window.LP_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
-  stripePaymentLink: window.LP_STRIPE_LINK       || 'https://buy.stripe.com/YOUR_LINK',
-  // Backend API — same Railway service serves both dashboard and API
-  // On Railway: dashboard on port 80 (nginx), backend on port 4000 (python)
-  // They share a Railway volume for the SQLite DB
-  apiBase: window.LP_API_BASE || '',   // empty = same origin, set to full URL if separate service
-  freePreviewMs:  30 * 1000,
-  freeLoggedInMs: 30 * 1000,
+  // Google OAuth Client ID — from console.cloud.google.com
+  // APIs & Services → Credentials → Create → OAuth 2.0 Client ID → Web application
+  googleClientId: window.LP_GOOGLE_CLIENT_ID || 'YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com',
+
+  // Stripe Payment Link — dashboard.stripe.com → Payment Links → Create
+  stripePaymentLink: window.LP_STRIPE_LINK || 'https://buy.stripe.com/YOUR_LINK',
+
+  // Timing
+  freePreviewMs:  30 * 1000,   // 30s before login wall
+  freeLoggedInMs: 30 * 1000,   // 30s after login before upgrade wall
 };
 
 var LP = {
@@ -2973,23 +2975,11 @@ function lpInit() {
   if (savedUser && savedUser.sub) {
     LP.user = savedUser;
     lpShowBadge(savedUser);
-    // Always re-verify pro status with backend on page load (catches cancellations)
-    if (savedUser.email) {
-      lpCheckProStatus(savedUser.email).then(function() {
-        if (!LP.isPro) {
-          var used = lpLoad('freeUsedMs', 0);
-          var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
-          if (rem <= 0) lpShowPro();
-          // else timer already started inside lpCheckProStatus fallback
-        }
-      });
-    } else {
-      if (LP.isPro) return;
-      var used = lpLoad('freeUsedMs', 0);
-      var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
-      if (rem <= 0) lpShowPro();
-      else lpStartFreeTimer(rem);
-    }
+    if (LP.isPro) return;
+    var used = lpLoad('freeUsedMs', 0);
+    var rem  = Math.max(0, LP_CONFIG.freeLoggedInMs - used);
+    if (rem <= 0) lpShowPro();
+    else lpStartFreeTimer(rem);
     return;
   }
 
@@ -3035,15 +3025,15 @@ function lpShowAuth() {
 
 // Called by Google GSI after user signs in
 function lpHandleGoogleToken(response) {
+  // Decode the JWT payload (no verification needed — we trust Google's redirect)
   try {
     var parts   = response.credential.split('.');
     var payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
     lpOnSignIn({
-      sub:         payload.sub,
-      email:       payload.email,
-      name:        payload.name,
-      picture:     payload.picture,
-      _credential: response.credential,  // pass raw JWT to backend for verification
+      sub:     payload.sub,
+      email:   payload.email,
+      name:    payload.name,
+      picture: payload.picture,
     });
   } catch(e) {
     console.error('[LP Auth] JWT decode failed:', e);
@@ -3063,65 +3053,8 @@ function lpOnSignIn(user) {
   clearInterval(LP.authTimer); clearInterval(LP.barInt);
   lpHide('lp-auth-overlay');
   lpShowBadge(user);
-  // If user has a raw Google credential, verify with backend to get session token
-  if (user._credential) {
-    lpVerifyWithBackend(user._credential, user);
-  } else {
-    // Demo mode or restored session — check pro status from backend
-    lpCheckProStatus(user.email);
-  }
+  lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
   console.log('[LP] Signed in:', user.email);
-}
-
-async function lpVerifyWithBackend(credential, user) {
-  try {
-    var resp = await fetch(LP_CONFIG.apiBase + '/api/verify-google', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ credential: credential })
-    });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    var data = await resp.json();
-    // Store the session token (used for future pro checks)
-    lpStore('sessionToken', data.token);
-    LP.isPro = data.is_pro;
-    lpStore('isPro', data.is_pro);
-    if (data.is_pro) {
-      lpShowBadge(user);
-      console.log('[LP] Backend: user is PRO');
-    } else {
-      lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
-    }
-  } catch(e) {
-    console.warn('[LP] Backend verify failed, falling back to local:', e.message);
-    // Fallback: proceed without backend verification
-    lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
-  }
-}
-
-async function lpCheckProStatus(email) {
-  try {
-    var token = lpLoad('sessionToken', null);
-    var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-    var url = LP_CONFIG.apiBase + '/api/check-pro' + (email ? '?email=' + encodeURIComponent(email) : '');
-    var resp = await fetch(url, { headers: headers });
-    if (!resp.ok) throw new Error('HTTP ' + resp.status);
-    var data = await resp.json();
-    if (data.is_pro !== LP.isPro) {
-      LP.isPro = data.is_pro;
-      lpStore('isPro', data.is_pro);
-    }
-    if (LP.isPro) {
-      var pro = document.getElementById('lp-pro-badge');
-      if (pro) pro.style.display = 'inline';
-      lpHide('lp-pro-overlay');
-    } else {
-      lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
-    }
-  } catch(e) {
-    console.warn('[LP] Pro check failed:', e.message);
-    lpStartFreeTimer(LP_CONFIG.freeLoggedInMs);
-  }
 }
 
 function lpStartFreeTimer(ms) {
@@ -3178,43 +3111,15 @@ function lpStartCheckout() {
   }
 }
 
-async function lpVerifyPayment() {
-  // Check backend to confirm payment actually processed via Stripe webhook
-  var btn = document.querySelector('.lp-btn-stripe');
-  if (btn) btn.textContent = 'Verifying payment...';
-  try {
-    var token = lpLoad('sessionToken', null);
-    var email = LP.user && LP.user.email;
-    var headers = token ? { 'Authorization': 'Bearer ' + token } : {};
-    var url = LP_CONFIG.apiBase + '/api/check-pro' + (email ? '?email=' + encodeURIComponent(email) : '');
-    var resp = await fetch(url, { headers: headers });
-    var data = await resp.json();
-    if (data.is_pro) {
-      LP.isPro = true;
-      lpStore('isPro', true);
-      clearInterval(LP.proTimer); clearInterval(LP.barInt);
-      lpHide('lp-pro-overlay');
-      var pro = document.getElementById('lp-pro-badge');
-      if (pro) pro.style.display = 'inline';
-      console.log('[LP] Backend confirmed PRO ✓');
-    } else {
-      // Payment not yet confirmed — Stripe webhook may take a few seconds
-      if (btn) btn.textContent = 'Not confirmed yet — wait 10s and try again';
-      setTimeout(function() {
-        if (btn) {
-          btn.textContent = '✓ Check payment status';
-          btn.onclick = lpVerifyPayment;
-        }
-      }, 10000);
-    }
-  } catch(e) {
-    // Backend unreachable — fall back to trust-based
-    console.warn('[LP] Backend unreachable, granting PRO locally:', e.message);
-    LP.isPro = true;
-    lpStore('isPro', true);
-    clearInterval(LP.proTimer); clearInterval(LP.barInt);
-    lpHide('lp-pro-overlay');
-  }
+function lpVerifyPayment() {
+  // Trust-based for now. Add Stripe webhook → backend verification for production.
+  LP.isPro = true;
+  lpStore('isPro', true);
+  clearInterval(LP.proTimer); clearInterval(LP.barInt);
+  lpHide('lp-pro-overlay');
+  var pro = document.getElementById('lp-pro-badge');
+  if (pro) pro.style.display = 'inline';
+  console.log('[LP] User marked PRO');
 }
 
 function lpDismissPro() {

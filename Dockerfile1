@@ -7,6 +7,5 @@ RUN chmod +x /entrypoint.sh
 ENV PORT=8080
 ENV LP_GOOGLE_CLIENT_ID=YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com
 ENV LP_STRIPE_LINK=https://buy.stripe.com/YOUR_LINK
-ENV LP_API_BASE=https://your-backend.up.railway.app
 EXPOSE 8080
 ENTRYPOINT ["/entrypoint.sh"]

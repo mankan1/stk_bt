@@ -2124,7 +2124,8 @@ setInterval(refreshYahoo, 60000);
 refreshYahoo();
 setTimeout(runBacktest, 800);
 setTimeout(function(){ buildUniverseBar(); loadAlpacaDemo(); }, 0);
-// lpInit() is called at end of the auth script block below
+// Start auth flow
+lpInit();
 
 
 // ═══════════════════════════════════════════════════════════════════
@@ -2132,36 +2133,33 @@ setTimeout(function(){ buildUniverseBar(); loadAlpacaDemo(); }, 0);
 // ═══════════════════════════════════════════════════════════════════
 var UNIVERSE = {
   'FUTURES':[
-    {s:'ES=F',l:'/ES S&P 500'},{s:'NQ=F',l:'/NQ Nasdaq 100'},{s:'RTY=F',l:'/RTY Russell 2000'},
-    {s:'YM=F',l:'/YM Dow Jones'},{s:'CL=F',l:'/CL Crude Oil'},{s:'NG=F',l:'/NG Nat Gas'},
-    {s:'GC=F',l:'/GC Gold'},{s:'SI=F',l:'/SI Silver'},{s:'HG=F',l:'/HG Copper'},
-    {s:'ZB=F',l:'/ZB 30Y T-Bond'},{s:'ZN=F',l:'/ZN 10Y Note'},{s:'ZC=F',l:'/ZC Corn'},
-    {s:'ZS=F',l:'/ZS Soybeans'},{s:'ZW=F',l:'/ZW Wheat'},{s:'6E=F',l:'/6E EUR/USD'},
-    {s:'6J=F',l:'/6J JPY/USD'},{s:'6B=F',l:'/6B GBP/USD'},{s:'BTC=F',l:'/BTC Bitcoin Fut'},
-    {s:'MES=F',l:'/MES Micro ES'},{s:'MNQ=F',l:'/MNQ Micro NQ'},{s:'MCL=F',l:'/MCL Micro Crude'},
+    {s:'ES=F',l:'/ES S&P'},{s:'NQ=F',l:'/NQ Nasdaq'},{s:'RTY=F',l:'/RTY Russell'},
+    {s:'YM=F',l:'/YM Dow'},{s:'CL=F',l:'/CL Crude'},{s:'NG=F',l:'/NG Nat Gas'},
+    {s:'GC=F',l:'/GC Gold'},{s:'SI=F',l:'/SI Silver'},{s:'ZB=F',l:'/ZB T-Bond'},
+    {s:'ZN=F',l:'/ZN 10Y'},{s:'HG=F',l:'/HG Copper'},{s:'ZC=F',l:'/ZC Corn'},
+    {s:'6E=F',l:'/6E EUR'},{s:'6J=F',l:'/6J JPY'},{s:'BTC=F',l:'/BTC Futures'},
+    {s:'MES=F',l:'/MES Micro ES'},{s:'MNQ=F',l:'/MNQ Micro NQ'},
   ],
   'ETFs':[
-    {s:'SPY',l:'S&P 500'},{s:'QQQ',l:'Nasdaq 100'},{s:'IWM',l:'Russell 2000'},
-    {s:'DIA',l:'Dow Jones'},{s:'VTI',l:'Total Market'},{s:'GLD',l:'Gold ETF'},
-    {s:'SLV',l:'Silver ETF'},{s:'USO',l:'Oil ETF'},{s:'TLT',l:'20Y Bond'},
-    {s:'HYG',l:'High Yield'},{s:'XLF',l:'Financials'},{s:'XLK',l:'Technology'},
-    {s:'XLE',l:'Energy'},{s:'XLV',l:'Healthcare'},{s:'XBI',l:'Biotech'},
-    {s:'ARKK',l:'ARK Innov'},{s:'VXX',l:'VIX ETF'},{s:'SQQQ',l:'3× Inv NQ'},
-    {s:'TQQQ',l:'3× NQ'},{s:'UVXY',l:'Ultra VIX'},{s:'EEM',l:'Emerg Markets'},
+    {s:'SPY',l:'S&P 500 ETF'},{s:'QQQ',l:'Nasdaq 100'},{s:'IWM',l:'Russell 2000'},
+    {s:'DIA',l:'Dow Jones'},{s:'GLD',l:'Gold ETF'},{s:'SLV',l:'Silver ETF'},
+    {s:'USO',l:'Oil ETF'},{s:'TLT',l:'20Y Bond'},{s:'HYG',l:'High Yield'},
+    {s:'XLF',l:'Financials'},{s:'XLK',l:'Technology'},{s:'XLE',l:'Energy'},
+    {s:'XLV',l:'Healthcare'},{s:'ARKK',l:'ARK Innov'},{s:'VXX',l:'VIX ETF'},
+    {s:'SQQQ',l:'3× Inv NQ'},{s:'TQQQ',l:'3× NQ'},{s:'UVXY',l:'Ultra VIX'},
   ],
   'STOCKS':[
     {s:'AAPL',l:'Apple'},{s:'MSFT',l:'Microsoft'},{s:'NVDA',l:'NVIDIA'},
     {s:'AMZN',l:'Amazon'},{s:'GOOGL',l:'Alphabet'},{s:'META',l:'Meta'},
     {s:'TSLA',l:'Tesla'},{s:'JPM',l:'JPMorgan'},{s:'BAC',l:'Bank of Am'},
-    {s:'GS',l:'Goldman Sachs'},{s:'V',l:'Visa'},{s:'MA',l:'Mastercard'},
-    {s:'UNH',l:'UnitedHealth'},{s:'XOM',l:'ExxonMobil'},{s:'LLY',l:'Eli Lilly'},
-    {s:'PLTR',l:'Palantir'},{s:'AMD',l:'AMD'},{s:'INTC',l:'Intel'},
-    {s:'NFLX',l:'Netflix'},{s:'CRM',l:'Salesforce'},{s:'COIN',l:'Coinbase'},
+    {s:'GS',l:'Goldman'},{s:'V',l:'Visa'},{s:'UNH',l:'UnitedHealth'},
+    {s:'XOM',l:'ExxonMobil'},{s:'LLY',l:'Eli Lilly'},{s:'PLTR',l:'Palantir'},
+    {s:'AMD',l:'AMD'},{s:'INTC',l:'Intel'},{s:'NFLX',l:'Netflix'},
   ],
   'CRYPTO':[
-    {s:'BTC-USD',l:'Bitcoin'},{s:'ETH-USD',l:'Ethereum'},{s:'SOL-USD',l:'Solana'},
-    {s:'BNB-USD',l:'BNB'},{s:'XRP-USD',l:'XRP'},{s:'ADA-USD',l:'Cardano'},
-    {s:'AVAX-USD',l:'Avalanche'},{s:'DOGE-USD',l:'Dogecoin'},{s:'LINK-USD',l:'Chainlink'},
+    {s:'BTC-USD',l:'Bitcoin'},{s:'ETH-USD',l:'Ethereum'},
+    {s:'SOL-USD',l:'Solana'},{s:'BNB-USD',l:'BNB'},
+    {s:'XRP-USD',l:'XRP'},{s:'DOGE-USD',l:'Dogecoin'},
   ],
 };
 
@@ -3220,8 +3218,5 @@ function lpDismissPro() {
   clearInterval(LP.timerBarInt);
   setTimeout(lpShowProWall, 5 * 60 * 1000);
 }
-
-// Start auth flow — called here because lpInit is defined in this script block
-lpInit();
 
 </script>

@@ -1,8 +1,10 @@
 FROM python:3.12-slim
 WORKDIR /app
 COPY server.py .
+# Create /data dir — Railway volume will mount here, but this ensures
+# the path exists even without a volume (uses container-local storage)
 RUN mkdir -p /data
-ENV PORT=4000
+# Railway sets $PORT dynamically — don't hardcode it
 ENV DB_PATH=/data/subscribers.db
-EXPOSE 4000
+EXPOSE 8080
 CMD ["python", "-u", "server.py"]

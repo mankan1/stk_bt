@@ -15,14 +15,12 @@ from urllib.parse import urlparse, parse_qs
 # ── Config from Railway env vars ──────────────────────────────────────────────
 GOOGLE_CLIENT_ID    = os.environ.get('LP_GOOGLE_CLIENT_ID', '')
 STRIPE_WEBHOOK_SECRET = os.environ.get('LP_STRIPE_WEBHOOK_SECRET', '')  # whsec_...
-PORT                = int(os.environ.get('PORT', 8080))
+PORT                = int(os.environ.get('PORT', 4000))
 DB_PATH             = os.environ.get('DB_PATH', '/data/subscribers.db')
 
 # ── SQLite DB ─────────────────────────────────────────────────────────────────
 def init_db():
-    db_dir = os.path.dirname(DB_PATH)
-    if db_dir:
-        os.makedirs(db_dir, exist_ok=True)
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = get_db()
     conn.execute('''
         CREATE TABLE IF NOT EXISTS subscribers (

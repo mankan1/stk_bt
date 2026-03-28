@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>LP Admin</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0a0a0b; color:#f0ead6; font-family:'JetBrains Mono',monospace; font-size:13px; }
+
+.header {
+  background:#111114; border-bottom:1px solid rgba(201,168,76,0.2);
+  padding:1rem 1.5rem; display:flex; align-items:center; justify-content:space-between;
+}
+.header h1 { color:#c9a84c; font-size:1rem; letter-spacing:0.1em; }
+.header .sub { color:#5a5448; font-size:0.7rem; margin-top:2px; }
+
+.login-wrap {
+  max-width:420px; margin:4rem auto; padding:2rem;
+  background:#16161a; border:1px solid rgba(201,168,76,0.15); border-radius:12px;
+}
+.login-wrap h2 { color:#c9a84c; margin-bottom:1.5rem; font-size:0.9rem; letter-spacing:0.1em; }
+
+.field { margin-bottom:1rem; }
+.field label { display:block; color:#9a9080; font-size:0.7rem; text-transform:uppercase; letter-spacing:0.1em; margin-bottom:0.4rem; }
+.field input {
+  width:100%; background:#0a0a0b; border:1px solid rgba(201,168,76,0.2);
+  color:#f0ead6; padding:0.6rem 0.75rem; border-radius:6px; font-family:inherit; font-size:0.85rem;
+  outline:none;
+}
+.field input:focus { border-color:rgba(201,168,76,0.5); }
+
+.btn {
+  width:100%; padding:0.7rem; background:#c9a84c; color:#0a0a0b;
+  border:none; border-radius:6px; font-family:inherit; font-size:0.82rem;
+  font-weight:700; letter-spacing:0.08em; cursor:pointer; transition:background 0.2s;
+}
+.btn:hover { background:#e8c97a; }
+.btn.danger { background:transparent; color:#e05252; border:1px solid rgba(224,82,82,0.4); margin-top:0.5rem; }
+.btn.danger:hover { background:rgba(224,82,82,0.1); }
+.btn.sm { width:auto; padding:0.3rem 0.75rem; font-size:0.72rem; }
+.btn.grant { background:rgba(76,175,130,0.15); color:#4caf82; border:1px solid rgba(76,175,130,0.3); }
+.btn.grant:hover { background:rgba(76,175,130,0.25); }
+.btn.revoke { background:rgba(224,82,82,0.1); color:#e05252; border:1px solid rgba(224,82,82,0.25); }
+.btn.revoke:hover { background:rgba(224,82,82,0.2); }
+
+#app { display:none; padding:1.5rem; }
+
+.stats {
+  display:grid; grid-template-columns:repeat(4,1fr); gap:1rem; margin-bottom:1.5rem;
+}
+.stat {
+  background:#16161a; border:1px solid rgba(201,168,76,0.12); border-radius:8px; padding:1rem;
+}
+.stat .val { font-size:1.75rem; font-weight:900; color:#c9a84c; line-height:1; }
+.stat .lbl { font-size:0.65rem; color:#5a5448; text-transform:uppercase; letter-spacing:0.1em; margin-top:4px; }
+
+.toolbar {
+  display:flex; gap:0.75rem; margin-bottom:1rem; align-items:center; flex-wrap:wrap;
+}
+.search {
+  flex:1; min-width:200px; background:#16161a; border:1px solid rgba(201,168,76,0.15);
+  color:#f0ead6; padding:0.5rem 0.75rem; border-radius:6px; font-family:inherit; font-size:0.82rem; outline:none;
+}
+.filter-btn {
+  padding:0.4rem 0.875rem; border-radius:6px; border:1px solid rgba(201,168,76,0.15);
+  background:transparent; color:#9a9080; font-family:inherit; font-size:0.72rem;
+  cursor:pointer; transition:all 0.15s; text-transform:uppercase; letter-spacing:0.06em;
+}
+.filter-btn.active { background:rgba(201,168,76,0.12); color:#c9a84c; border-color:rgba(201,168,76,0.3); }
+
+.grant-row {
+  background:#16161a; border:1px solid rgba(201,168,76,0.12); border-radius:8px;
+  padding:0.875rem 1rem; margin-bottom:1rem; display:flex; gap:0.75rem; align-items:center;
+}
+.grant-row input {
+  flex:1; background:#0a0a0b; border:1px solid rgba(201,168,76,0.2);
+  color:#f0ead6; padding:0.45rem 0.75rem; border-radius:6px; font-family:inherit; font-size:0.82rem; outline:none;
+}
+
+table { width:100%; border-collapse:collapse; }
+.table-wrap { background:#16161a; border:1px solid rgba(201,168,76,0.12); border-radius:8px; overflow:hidden; }
+thead tr { background:#1c1c22; border-bottom:1px solid rgba(201,168,76,0.12); }
+th { padding:0.6rem 1rem; text-align:left; font-size:0.65rem; color:#5a5448; text-transform:uppercase; letter-spacing:0.1em; font-weight:400; }
+td { padding:0.65rem 1rem; border-bottom:1px solid rgba(201,168,76,0.06); font-size:0.8rem; }
+tr:last-child td { border-bottom:none; }
+tr:hover td { background:rgba(201,168,76,0.03); }
+
+.badge {
+  display:inline-block; padding:0.15rem 0.5rem; border-radius:4px; font-size:0.65rem;
+  font-weight:700; letter-spacing:0.06em; text-transform:uppercase;
+}
+.badge.pro { background:rgba(201,168,76,0.15); color:#c9a84c; border:1px solid rgba(201,168,76,0.3); }
+.badge.free { background:rgba(90,84,72,0.2); color:#5a5448; border:1px solid rgba(90,84,72,0.3); }
+
+.actions { display:flex; gap:0.4rem; }
+.email-cell { color:#c9a84c; font-size:0.78rem; }
+.dim { color:#5a5448; }
+.toast {
+  position:fixed; bottom:1.5rem; right:1.5rem;
+  background:#1c1c22; border:1px solid rgba(201,168,76,0.3); border-radius:8px;
+  padding:0.75rem 1.25rem; font-size:0.8rem; color:#c9a84c;
+  opacity:0; transition:opacity 0.3s; pointer-events:none; z-index:999;
+}
+.toast.show { opacity:1; }
+.toast.error { border-color:rgba(224,82,82,0.4); color:#e05252; }
+#status { color:#5a5448; font-size:0.75rem; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>⚡ LIVERMORE PROTOCOL — ADMIN</h1>
+    <div class="sub">Subscriber management dashboard</div>
+  </div>
+  <div style="display:flex;gap:1rem;align-items:center">
+    <span id="status"></span>
+    <button class="btn sm" id="refresh-btn" style="display:none" onclick="loadSubscribers()">↻ Refresh</button>
+    <button class="btn sm danger" id="logout-btn" style="display:none" onclick="logout()">Sign out</button>
+  </div>
+</div>
+
+<!-- Login -->
+<div class="login-wrap" id="login-panel">
+  <h2>ADMIN ACCESS</h2>
+  <div class="field">
+    <label>Backend URL</label>
+    <input id="api-url" type="url" placeholder="https://your-backend.railway.app" />
+  </div>
+  <div class="field">
+    <label>Admin Secret</label>
+    <input id="admin-secret" type="password" placeholder="LP_ADMIN_SECRET value" />
+  </div>
+  <button class="btn" onclick="login()">Connect</button>
+  <div id="login-err" style="color:#e05252;font-size:0.75rem;margin-top:0.75rem;display:none"></div>
+</div>
+
+<!-- Main app -->
+<div id="app">
+  <!-- Stats -->
+  <div class="stats">
+    <div class="stat"><div class="val" id="s-total">—</div><div class="lbl">Total Users</div></div>
+    <div class="stat"><div class="val" id="s-pro" style="color:#4caf82">—</div><div class="lbl">PRO Subscribers</div></div>
+    <div class="stat"><div class="val" id="s-free" style="color:#5a5448">—</div><div class="lbl">Free Users</div></div>
+    <div class="stat"><div class="val" id="s-rev" style="color:#c9a84c">—</div><div class="lbl">Est. MRR</div></div>
+  </div>
+
+  <!-- Manual grant -->
+  <div class="grant-row">
+    <span style="color:#9a9080;font-size:0.72rem;white-space:nowrap">GRANT PRO:</span>
+    <input id="grant-email" type="email" placeholder="user@email.com" onkeydown="if(event.key==='Enter')grantPro()" />
+    <button class="btn sm grant" onclick="grantPro()">Grant PRO</button>
+    <button class="btn sm revoke" onclick="revokeByInput()">Revoke PRO</button>
+  </div>
+
+  <!-- Toolbar -->
+  <div class="toolbar">
+    <input class="search" id="search" placeholder="Search email..." oninput="renderTable()" />
+    <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">All</button>
+    <button class="filter-btn" data-filter="pro" onclick="setFilter('pro',this)">PRO Only</button>
+    <button class="filter-btn" data-filter="free" onclick="setFilter('free',this)">Free Only</button>
+  </div>
+
+  <!-- Table -->
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Email</th>
+          <th>Status</th>
+          <th>Stripe Customer</th>
+          <th>Joined</th>
+          <th>Last Login</th>
+          <th>Actions</th>
+        </tr>
+      </thead>
+      <tbody id="table-body">
+        <tr><td colspan="6" style="text-align:center;color:#5a5448;padding:2rem">Loading...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+var STATE = { url: '', secret: '', subscribers: [], filter: 'all' };
+
+// ── Persist creds in sessionStorage ──────────────────────────────────────────
+function login() {
+  var url    = document.getElementById('api-url').value.trim().replace(/\/$/, '');
+  var secret = document.getElementById('admin-secret').value.trim();
+  if (!url || !secret) { showLoginErr('Both fields required'); return; }
+  STATE.url = url;
+  STATE.secret = secret;
+  sessionStorage.setItem('lp_admin_url', url);
+  sessionStorage.setItem('lp_admin_secret', secret);
+  loadSubscribers();
+}
+
+function logout() {
+  sessionStorage.clear();
+  STATE = { url:'', secret:'', subscribers:[], filter:'all' };
+  document.getElementById('login-panel').style.display = 'block';
+  document.getElementById('app').style.display = 'none';
+  document.getElementById('logout-btn').style.display = 'none';
+  document.getElementById('refresh-btn').style.display = 'none';
+}
+
+function showLoginErr(msg) {
+  var el = document.getElementById('login-err');
+  el.textContent = msg; el.style.display = 'block';
+}
+
+// ── API helpers ───────────────────────────────────────────────────────────────
+async function api(path, method) {
+  var resp = await fetch(STATE.url + path, {
+    method: method || 'GET',
+    headers: { 'Authorization': 'Bearer ' + STATE.secret }
+  });
+  if (resp.status === 401) throw new Error('Invalid admin secret');
+  return resp.json();
+}
+
+// ── Load subscribers ──────────────────────────────────────────────────────────
+async function loadSubscribers() {
+  setStatus('Loading...');
+  try {
+    var data = await api('/api/admin/subscribers');
+    STATE.subscribers = data.subscribers || [];
+
+    // Stats
+    var pro  = STATE.subscribers.filter(s => s.is_pro).length;
+    var free = STATE.subscribers.length - pro;
+    document.getElementById('s-total').textContent = STATE.subscribers.length;
+    document.getElementById('s-pro').textContent   = pro;
+    document.getElementById('s-free').textContent  = free;
+    document.getElementById('s-rev').textContent   = '$' + (pro * 29).toLocaleString();
+
+    document.getElementById('login-panel').style.display = 'none';
+    document.getElementById('app').style.display = 'block';
+    document.getElementById('logout-btn').style.display = 'inline-block';
+    document.getElementById('refresh-btn').style.display = 'inline-block';
+    document.getElementById('login-err').style.display = 'none';
+    setStatus('Updated ' + new Date().toLocaleTimeString());
+    renderTable();
+  } catch(e) {
+    showLoginErr(e.message);
+    setStatus('');
+  }
+}
+
+// ── Render table ──────────────────────────────────────────────────────────────
+function renderTable() {
+  var search  = document.getElementById('search').value.toLowerCase();
+  var filter  = STATE.filter;
+  var rows    = STATE.subscribers.filter(s => {
+    if (filter === 'pro'  && !s.is_pro) return false;
+    if (filter === 'free' &&  s.is_pro) return false;
+    if (search && !s.email.toLowerCase().includes(search)) return false;
+    return true;
+  });
+
+  var tbody = document.getElementById('table-body');
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#5a5448;padding:2rem">No subscribers found</td></tr>';
+    return;
+  }
+
+  tbody.innerHTML = rows.map(s => {
+    var joined   = s.joined    ? new Date(s.joined * 1000).toLocaleDateString()    : '—';
+    var lastLogin= s.last_login? new Date(s.last_login*1000).toLocaleDateString()  : '—';
+    var custLink = s.stripe_customer
+      ? '<a href="https://dashboard.stripe.com/customers/' + s.stripe_customer + '" target="_blank" style="color:#c9a84c;font-size:0.72rem">' + s.stripe_customer.slice(0,16) + '…</a>'
+      : '<span class="dim">—</span>';
+    return '<tr>' +
+      '<td class="email-cell">' + s.email + '</td>' +
+      '<td><span class="badge ' + (s.is_pro ? 'pro' : 'free') + '">' + (s.is_pro ? 'PRO' : 'FREE') + '</span></td>' +
+      '<td>' + custLink + '</td>' +
+      '<td class="dim">' + joined + '</td>' +
+      '<td class="dim">' + lastLogin + '</td>' +
+      '<td><div class="actions">' +
+        (s.is_pro
+          ? '<button class="btn sm revoke" onclick="revokeEmail(\'' + s.email + '\')">Revoke</button>'
+          : '<button class="btn sm grant"  onclick="grantEmail(\'' + s.email + '\')">Grant PRO</button>') +
+      '</div></td>' +
+    '</tr>';
+  }).join('');
+}
+
+// ── Grant / Revoke ────────────────────────────────────────────────────────────
+async function grantEmail(email) {
+  try {
+    var data = await api('/api/admin/grant-pro?email=' + encodeURIComponent(email));
+    if (data.ok) { toast('PRO granted: ' + email); await loadSubscribers(); }
+    else toast('Failed: ' + JSON.stringify(data), true);
+  } catch(e) { toast(e.message, true); }
+}
+
+async function revokeEmail(email) {
+  if (!confirm('Revoke PRO for ' + email + '?')) return;
+  try {
+    var data = await api('/api/admin/revoke-pro?email=' + encodeURIComponent(email));
+    if (data.ok) { toast('PRO revoked: ' + email); await loadSubscribers(); }
+    else toast('Failed: ' + JSON.stringify(data), true);
+  } catch(e) { toast(e.message, true); }
+}
+
+function grantPro() {
+  var email = document.getElementById('grant-email').value.trim();
+  if (!email) { toast('Enter an email first', true); return; }
+  grantEmail(email);
+}
+
+function revokeByInput() {
+  var email = document.getElementById('grant-email').value.trim();
+  if (!email) { toast('Enter an email first', true); return; }
+  revokeEmail(email);
+}
+
+function setFilter(f, el) {
+  STATE.filter = f;
+  document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  renderTable();
+}
+
+function setStatus(msg) { document.getElementById('status').textContent = msg; }
+
+function toast(msg, isError) {
+  var el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'toast show' + (isError ? ' error' : '');
+  setTimeout(function() { el.className = 'toast'; }, 3000);
+}
+
+// ── Auto-restore session ──────────────────────────────────────────────────────
+(function() {
+  var url    = sessionStorage.getItem('lp_admin_url');
+  var secret = sessionStorage.getItem('lp_admin_secret');
+  if (url && secret) {
+    document.getElementById('api-url').value    = url;
+    document.getElementById('admin-secret').value = secret;
+    STATE.url = url; STATE.secret = secret;
+    loadSubscribers();
+  }
+})();
+</script>
+</body>
+</html>

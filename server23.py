@@ -83,7 +83,7 @@ def make_session_token(email, sub):
 # ── Stripe webhook verification ───────────────────────────────────────────────
 def verify_stripe_signature(payload_bytes, sig_header):
     if not STRIPE_WEBHOOK_SECRET:
-        return True  # Skip in dev if not configured
+        return True
     try:
         parts = {}
         for item in sig_header.split(','):
@@ -93,31 +93,20 @@ def verify_stripe_signature(payload_bytes, sig_header):
         v1_sig = parts.get('v1', '')
         if not timestamp or not v1_sig:
             return False
-
-        # whsec_ secrets are base64-encoded raw bytes
-        import base64 as _b64
         secret = STRIPE_WEBHOOK_SECRET.strip()
         if secret.startswith('whsec_'):
             secret = secret[6:]
-        # Add padding and decode
-        padding = 4 - len(secret) % 4
-        if padding != 4:
-            secret += '=' * padding
-        secret_bytes = _b64.b64decode(secret)
-
-        signed_payload = f'{timestamp}.'.encode() + payload_bytes
-        expected = hmac.new(secret_bytes, signed_payload, hashlib.sha256).hexdigest()
-
-        print(f'[webhook] sig_check expected={expected[:16]} got={v1_sig[:16]}')
+        signed_payload = timestamp.encode() + b'.' + payload_bytes
+        expected = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
         if not hmac.compare_digest(expected, v1_sig):
+            print(f'[webhook] sig mismatch expected={expected[:16]} got={v1_sig[:16]}')
             return False
         if abs(time.time() - int(timestamp)) > 300:
-            print('[webhook] timestamp too old')
+            print(f'[webhook] timestamp too old')
             return False
         return True
     except Exception as e:
         print(f'[webhook] Signature error: {e}')
-        import traceback; traceback.print_exc()
         return False
 
 # ── Admin auth helper ─────────────────────────────────────────────────────────

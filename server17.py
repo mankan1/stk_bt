@@ -134,24 +134,23 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def read_body(self):
+        # Handle both Content-Length and Transfer-Encoding: chunked
         length = self.headers.get('Content-Length')
         if length:
             return self.rfile.read(int(length))
+        # Chunked or unknown — read until connection closes
         te = self.headers.get('Transfer-Encoding', '')
         if 'chunked' in te.lower():
             body = b''
             while True:
                 line = self.rfile.readline().strip()
-                try:
-                    chunk_len = int(line, 16)
-                except ValueError:
-                    break
+                chunk_len = int(line, 16)
                 if chunk_len == 0:
                     break
                 body += self.rfile.read(chunk_len)
-                self.rfile.readline()
+                self.rfile.readline()  # consume CRLF
             return body
-        return b''
+        return b''  
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -347,8 +346,8 @@ class Handler(BaseHTTPRequestHandler):
         elif path == '/api/stripe-webhook':
             sig = self.headers.get('Stripe-Signature', '')
             te = self.headers.get('Transfer-Encoding', 'none')
-            cl = self.headers.get('Content-Length', 'none')
-            print(f'[webhook] Received event, body={len(body)}b TE={te} CL={cl}')
+        cl = self.headers.get('Content-Length', 'none')
+        print(f'[webhook] Received event, body={len(body)}b TE={te} CL={cl}')
 
             if not verify_stripe_signature(body, sig):
                 print('[webhook] Invalid Stripe signature — check LP_STRIPE_WEBHOOK_SECRET')

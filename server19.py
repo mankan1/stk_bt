@@ -85,34 +85,21 @@ def verify_stripe_signature(payload_bytes, sig_header):
     if not STRIPE_WEBHOOK_SECRET:
         return True  # Skip in dev if not configured
     try:
-        # Parse signature header: t=timestamp,v1=sig
-        parts = {}
-        for item in sig_header.split(','):
-            k, v = item.split('=', 1)
-            parts[k.strip()] = v.strip()
-
+        parts   = dict(x.split('=', 1) for x in sig_header.split(','))
         timestamp = parts.get('t', '')
         v1_sig    = parts.get('v1', '')
+        signed_payload = f'{timestamp}.'.encode() + payload_bytes
 
-        if not timestamp or not v1_sig:
-            print(f'[webhook] Missing t or v1 in sig header: {sig_header[:50]}')
-            return False
-
-        # Strip whsec_ prefix
-        secret = STRIPE_WEBHOOK_SECRET.strip()
+        # Fix: strip 'whsec_' prefix correctly — slice not lstrip
+        secret = STRIPE_WEBHOOK_SECRET
         if secret.startswith('whsec_'):
             secret = secret[6:]
-
-        # Stripe signed payload = timestamp + "." + raw_body
-        signed_payload = timestamp.encode() + b'.' + payload_bytes
 
         expected = hmac.new(
             secret.encode(),
             signed_payload,
             hashlib.sha256
         ).hexdigest()
-
-        print(f'[webhook] sig_check: ts={timestamp} expected={expected[:16]} got={v1_sig[:16]}')
 
         if not hmac.compare_digest(expected, v1_sig):
             return False
@@ -343,7 +330,15 @@ class Handler(BaseHTTPRequestHandler):
         # ── POST /api/stripe-webhook ──────────────────────────────────────────
         elif path == '/api/stripe-webhook':
             sig = self.headers.get('Stripe-Signature', '')
-            print(f'[webhook] Received event, body={len(body)}b')
+            import hashlib as _hl, hmac as _hmac
+            body_md5 = _hl.md5(body).hexdigest()
+            _parts2 = dict(x.split('=', 1) for x in sig.split(','))
+            _ts2 = _parts2.get('t', '')
+            _signed2 = f'{_ts2}.'.encode() + body
+            _secret2 = STRIPE_WEBHOOK_SECRET[6:] if STRIPE_WEBHOOK_SECRET.startswith('whsec_') else STRIPE_WEBHOOK_SECRET
+            _computed2 = _hmac.new(_secret2.encode(), _signed2, _hl.sha256).hexdigest()
+            _stripe2 = _parts2.get('v1', '')
+            print(f'[webhook] body={len(body)}b md5={body_md5[:8]} computed={_computed2[:16]} stripe={_stripe2[:16]} match={_computed2==_stripe2}')
 
             if not verify_stripe_signature(body, sig):
                 print('[webhook] Invalid Stripe signature — check LP_STRIPE_WEBHOOK_SECRET')

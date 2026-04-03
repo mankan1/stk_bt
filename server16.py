@@ -85,6 +85,8 @@ def verify_stripe_signature(payload_bytes, sig_header):
     if not STRIPE_WEBHOOK_SECRET:
         return True  # Skip in dev if not configured
     try:
+        print(f'[webhook] SECRET first 20: {STRIPE_WEBHOOK_SECRET[:20]}')
+        print(f'[webhook] SIG HEADER: {sig_header[:80]}')
         parts   = dict(x.split('=', 1) for x in sig_header.split(','))
         timestamp = parts.get('t', '')
         v1_sig    = parts.get('v1', '')
@@ -134,23 +136,8 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def read_body(self):
-        # Handle both Content-Length and Transfer-Encoding: chunked
-        length = self.headers.get('Content-Length')
-        if length:
-            return self.rfile.read(int(length))
-        # Chunked or unknown — read until connection closes
-        te = self.headers.get('Transfer-Encoding', '')
-        if 'chunked' in te.lower():
-            body = b''
-            while True:
-                line = self.rfile.readline().strip()
-                chunk_len = int(line, 16)
-                if chunk_len == 0:
-                    break
-                body += self.rfile.read(chunk_len)
-                self.rfile.readline()  # consume CRLF
-            return body
-        return b''  
+        length = int(self.headers.get('Content-Length', 0))
+        return self.rfile.read(length) if length else b''
 
     def do_OPTIONS(self):
         self.send_response(200)
@@ -345,9 +332,7 @@ class Handler(BaseHTTPRequestHandler):
         # ── POST /api/stripe-webhook ──────────────────────────────────────────
         elif path == '/api/stripe-webhook':
             sig = self.headers.get('Stripe-Signature', '')
-            te = self.headers.get('Transfer-Encoding', 'none')
-        cl = self.headers.get('Content-Length', 'none')
-        print(f'[webhook] Received event, body={len(body)}b TE={te} CL={cl}')
+            print(f'[webhook] Received event, body={len(body)}b')
 
             if not verify_stripe_signature(body, sig):
                 print('[webhook] Invalid Stripe signature — check LP_STRIPE_WEBHOOK_SECRET')

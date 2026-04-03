@@ -82,9 +82,32 @@ def make_session_token(email, sub):
 
 # ── Stripe webhook verification ───────────────────────────────────────────────
 def verify_stripe_signature(payload_bytes, sig_header):
-    # TODO: fix signature verification — returning True for now
-    # Pipeline confirmed working end-to-end
-    return True
+    if not STRIPE_WEBHOOK_SECRET:
+        return True
+    try:
+        parts = {}
+        for item in sig_header.split(','):
+            k, v = item.split('=', 1)
+            parts[k.strip()] = v.strip()
+        timestamp = parts.get('t', '')
+        v1_sig = parts.get('v1', '')
+        if not timestamp or not v1_sig:
+            return False
+        secret = STRIPE_WEBHOOK_SECRET.strip()
+        if secret.startswith('whsec_'):
+            secret = secret[6:]
+        signed_payload = f'{timestamp}.'.encode() + payload_bytes
+        expected = hmac.new(secret.encode(), signed_payload, hashlib.sha256).hexdigest()
+        print(f'[webhook] sig_check expected={expected[:16]} got={v1_sig[:16]} match={expected==v1_sig} secret={STRIPE_WEBHOOK_SECRET}')
+        if not hmac.compare_digest(expected, v1_sig):
+            return False
+        if abs(time.time() - int(timestamp)) > 300:
+            print('[webhook] timestamp too old')
+            return False
+        return True
+    except Exception as e:
+        print(f'[webhook] Signature error: {e}')
+        return False
 
 # ── Admin auth helper ─────────────────────────────────────────────────────────
 def is_admin(headers):

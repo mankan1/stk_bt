@@ -101,19 +101,13 @@ def verify_stripe_signature(payload_bytes, sig_header):
             hashlib.sha256
         ).hexdigest()
 
-        print(f'[webhook] DEBUG expected={expected[:16]} got={v1_sig[:16]}')
         if not hmac.compare_digest(expected, v1_sig):
-            print('[webhook] DEBUG: signature mismatch')
             return False
-        age = abs(time.time() - int(timestamp))
-        print(f'[webhook] DEBUG: age={age:.0f}s')
-        if age > 300:
-            print(f'[webhook] DEBUG: timestamp too old: {age:.0f}s')
+        if abs(time.time() - int(timestamp)) > 300:
             return False
         return True
     except Exception as e:
         print(f'[webhook] Signature error: {e}')
-        import traceback; traceback.print_exc()
         return False
 
 # ── Admin auth helper ─────────────────────────────────────────────────────────

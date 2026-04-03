@@ -82,25 +82,37 @@ def make_session_token(email, sub):
 
 # ── Stripe webhook verification ───────────────────────────────────────────────
 def verify_stripe_signature(payload_bytes, sig_header):
-    return True  # TEMP: skip verification for debugging
     if not STRIPE_WEBHOOK_SECRET:
         return True  # Skip in dev if not configured
     try:
-        parts   = dict(x.split('=', 1) for x in sig_header.split(','))
+        # Parse signature header: t=timestamp,v1=sig
+        parts = {}
+        for item in sig_header.split(','):
+            k, v = item.split('=', 1)
+            parts[k.strip()] = v.strip()
+
         timestamp = parts.get('t', '')
         v1_sig    = parts.get('v1', '')
-        signed_payload = f'{timestamp}.'.encode() + payload_bytes
 
-        # Fix: strip 'whsec_' prefix correctly — slice not lstrip
-        secret = STRIPE_WEBHOOK_SECRET
+        if not timestamp or not v1_sig:
+            print(f'[webhook] Missing t or v1 in sig header: {sig_header[:50]}')
+            return False
+
+        # Strip whsec_ prefix
+        secret = STRIPE_WEBHOOK_SECRET.strip()
         if secret.startswith('whsec_'):
             secret = secret[6:]
+
+        # Stripe signed payload = timestamp + "." + raw_body
+        signed_payload = timestamp.encode() + b'.' + payload_bytes
 
         expected = hmac.new(
             secret.encode(),
             signed_payload,
             hashlib.sha256
         ).hexdigest()
+
+        print(f'[webhook] sig_check: ts={timestamp} expected={expected[:16]} got={v1_sig[:16]}')
 
         if not hmac.compare_digest(expected, v1_sig):
             return False
